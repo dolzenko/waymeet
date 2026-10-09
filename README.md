@@ -120,8 +120,9 @@ response limit, and conditional requests using ETag/Last-Modified.
 ICS subscriptions use the daemon's existing sync interval. Recurring events
 are expanded locally for the requested time window, including `RRULE`, `RDATE`,
 `EXDATE`, and individual `RECURRENCE-ID` edits/cancellations. Occurrence IDs remain
-stable when a meeting is moved. Windows timezone names are mapped through Unicode
-CLDR; IANA timezone rules preserve local meeting times across DST changes.
+stable when a meeting is moved. All-day recurrences accept date-only `UNTIL`
+limits, including the last date as exported by Google Calendar. Windows timezone
+names are mapped through Unicode CLDR; IANA timezone rules preserve local meeting times across DST changes.
 Floating times use `X-WR-TIMEZONE`, or the configured `timezone` (UTC by default).
 Custom `VTIMEZONE` definitions are not evaluated; use `timezone_aliases` to map
 such identifiers to an equivalent IANA zone. Start-relative DISPLAY/AUDIO alarms

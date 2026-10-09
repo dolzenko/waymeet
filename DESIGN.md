@@ -309,3 +309,7 @@ errors deliberately exclude payload text and URLs. HTTP bodies and validators
 are cached only after complete parsing/expansion succeeds; a 304 re-expands the
 cached body against the new window rather than returning `not_modified`.
 Existing per-provider last-known-good retention handles download/parse failures.
+
+All-day dates use UTC midnight internally. Date-only RRULE UNTIL boundaries
+are normalised to the same representation before rrule validation, avoiding
+machine-local timezone interpretation while retaining the inclusive last date.

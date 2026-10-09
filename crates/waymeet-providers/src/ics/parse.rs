@@ -328,10 +328,25 @@ pub(super) fn events(
                 for p in &event.properties {
                     match p.name.as_str() {
                         "RRULE" => {
-                            let rule = p
-                                .value
-                                .as_deref()
-                                .unwrap_or_default()
+                            // DATE values have no timezone. We represent all-day dates
+                            // at UTC midnight, so date-only UNTIL must use the same
+                            // representation rather than rrule's machine-local default.
+                            let text = p.value.as_deref().unwrap_or_default();
+                            let text = text
+                                .split(';')
+                                .map(|part| {
+                                    if begin.all_day
+                                        && let Some(date) = part.strip_prefix("UNTIL=")
+                                        && date.len() == 8
+                                    {
+                                        format!("UNTIL={date}T000000Z")
+                                    } else {
+                                        part.to_owned()
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(";");
+                            let rule = text
                                 .parse::<RRule<Unvalidated>>()
                                 .map_err(|_| invalid("Invalid ICS recurrence rule"))?
                                 .validate(begin.dt)

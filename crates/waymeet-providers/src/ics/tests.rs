@@ -331,3 +331,23 @@ fn monthly_rule_until_and_multiple_exdates() {
         ]
     );
 }
+
+#[test]
+fn all_day_recurrence_until_date_is_inclusive() {
+    let fields = event(
+        "UID:all-day-until\nDTSTART;VALUE=DATE:20261001\nDTEND;VALUE=DATE:20261002\nRRULE:FREQ=DAILY;UNTIL=20261003\nSUMMARY:All day",
+    );
+    let events = parsed(&fields, "2026-10-01T00:00:00Z", 5);
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| datetime(&e.start))
+            .collect::<Vec<_>>(),
+        ["2026-10-01", "2026-10-02", "2026-10-03"]
+    );
+    assert_eq!(
+        events.iter().map(|e| datetime(&e.end)).collect::<Vec<_>>(),
+        ["2026-10-02", "2026-10-03", "2026-10-04"]
+    );
+    assert!(parsed(&fields, "2026-10-04T00:00:00Z", 5).is_empty());
+}
