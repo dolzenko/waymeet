@@ -56,7 +56,8 @@ hour_separator = ":"              # Hour separator character (e.g., ":", "h")
 until_offset = 60                 # Minutes offset after which absolute time is shown
 time_format = "24h"               # Time format ("24h" or "12h")
 open_with = "firefox"             # Custom command for opening URLs
-tooltip_limit = 10                # Maximum number of meetings in tooltip
+tooltip_limit = 10                # Omit for an unlimited tooltip
+tooltip_include_past_today = false # Include finished events from today in Waybar tooltip
 waybar_show_all_day = true        # Show all-day meetings in Waybar output
 
 [filters]

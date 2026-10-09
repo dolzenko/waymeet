@@ -185,6 +185,10 @@ pub struct MeetingsFilter {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub today_only: bool,
 
+    /// Also return finished events from the current local day.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_past_today: bool,
+
     /// Maximum number of meetings to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -819,6 +823,22 @@ mod tests {
         let filter: MeetingsFilter = serde_json::from_str(json).unwrap();
         assert_eq!(filter.include_titles, vec!["standup".to_string()]);
         assert_eq!(filter.exclude_titles, vec!["optional".to_string()]);
+        assert!(!filter.include_past_today);
+        assert!(
+            !serde_json::to_string(&filter)
+                .unwrap()
+                .contains("include_past_today")
+        );
+        let agenda = MeetingsFilter {
+            include_past_today: true,
+            ..filter
+        };
+        let encoded = serde_json::to_string(&agenda).unwrap();
+        assert!(
+            serde_json::from_str::<MeetingsFilter>(&encoded)
+                .unwrap()
+                .include_past_today
+        );
     }
 
     #[test]

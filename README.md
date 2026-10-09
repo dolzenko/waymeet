@@ -180,6 +180,13 @@ For a countdown followed by the meeting title, use `format = "{when} · {title}"
 in `[display]`. The time placeholder is `{when}`; `{start_time}` and `{end_time}`
 provide clock times. The same placeholders work in `tooltip_format`.
 
+To keep finished events from today in the Waybar tooltip, set
+`tooltip_include_past_today = true` in `[display]`. The chip and meeting actions
+still select ongoing/upcoming events. Upcoming events from the next 24 hours
+remain in the tooltip. Omit `tooltip_limit` to show the full list; ordinary
+calendar/title filters still apply. Restart the daemon after upgrading: it now
+fetches from local midnight through the next 24 hours to retain today's agenda.
+
 Supply Google credentials in either of these forms:
 
 - `credentials_file = "/path/to/client_secret_<id>.json"` for the downloaded

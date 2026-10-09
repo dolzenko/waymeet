@@ -119,11 +119,19 @@ impl ServerState {
 
     /// Returns the cached meetings, optionally filtered.
     pub fn get_meetings(&self, filter: Option<&MeetingsFilter>) -> Vec<MeetingView> {
-        let now = chrono::Local::now();
-        let mut meetings: Vec<_> = self.meetings.to_vec();
+        self.get_meetings_at(filter, chrono::Local::now())
+    }
 
-        // Filter out meetings that have already ended, including all-day events.
-        meetings.retain(|m| !m.has_ended_at(now));
+    fn get_meetings_at(
+        &self,
+        filter: Option<&MeetingsFilter>,
+        now: chrono::DateTime<chrono::Local>,
+    ) -> Vec<MeetingView> {
+        let mut meetings: Vec<_> = self.meetings.to_vec();
+        let include_past_today = filter.is_some_and(|f| f.include_past_today);
+        meetings.retain(|m| {
+            !m.has_ended_at(now) || (include_past_today && m.occurs_on_date(now.date_naive()))
+        });
 
         if let Some(filter) = filter {
             // Apply skip_all_day filter
@@ -892,6 +900,40 @@ mod tests {
         // Limit
         let filter = MeetingsFilter::new().limit(1);
         assert_eq!(state.get_meetings(Some(&filter)).len(), 1);
+    }
+
+    #[test]
+    fn agenda_includes_finished_today_but_not_yesterday_or_next_day() {
+        use chrono::TimeZone;
+        let now = Local.with_ymd_and_hms(2026, 10, 9, 15, 0, 0).unwrap();
+        let mut state = ServerState::new();
+        let make = |id: &str, day, hour| {
+            let mut meeting = provider_meeting(id, "ics:test", 0);
+            meeting.start_local = Local.with_ymd_and_hms(2026, 10, day, hour, 0, 0).unwrap();
+            meeting.end_local = meeting.start_local + chrono::Duration::minutes(15);
+            meeting
+        };
+        state.set_meetings(vec![
+            make("yesterday", 8, 10),
+            make("morning", 9, 10),
+            make("next", 9, 16),
+            make("tomorrow", 10, 10),
+        ]);
+        let ids = |items: Vec<MeetingView>| items.into_iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids(state.get_meetings_at(None, now)), ["next", "tomorrow"]);
+        let agenda = MeetingsFilter {
+            include_past_today: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(state.get_meetings_at(Some(&agenda), now)),
+            ["morning", "next", "tomorrow"]
+        );
+        let midnight = Local.with_ymd_and_hms(2026, 10, 10, 0, 0, 0).unwrap();
+        assert_eq!(
+            ids(state.get_meetings_at(Some(&agenda), midnight)),
+            ["tomorrow"]
+        );
     }
 
     #[test]

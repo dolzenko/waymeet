@@ -313,3 +313,13 @@ Existing per-provider last-known-good retention handles download/parse failures.
 All-day dates use UTC midnight internally. Date-only RRULE UNTIL boundaries
 are normalised to the same representation before rrule validation, avoiding
 machine-local timezone interpretation while retaining the inclusive last date.
+
+## Daily Waybar agenda
+
+The daemon fetches from local midnight to now plus 24 hours. IPC meeting queries
+still omit finished events unless `include_past_today` is explicitly requested;
+yesterday's history expires at the next local midnight even before a new sync.
+With `display.tooltip_include_past_today`, the CLI requests a second list for the
+tooltip, without the main result-count limit. Chip selection, urgency and join
+operations use only the ordinary ongoing/upcoming list. Tooltip limits and
+calendar/title filters remain explicit controls.

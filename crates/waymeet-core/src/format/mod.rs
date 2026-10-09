@@ -321,23 +321,34 @@ impl OutputFormatter {
             )
         };
 
-        // Build tooltip with all meetings
-        let tooltip_meetings: Vec<_> = if let Some(limit) = self.options.tooltip_limit {
-            meetings.iter().take(limit).collect()
-        } else {
-            meetings.iter().collect()
-        };
-
-        let tooltip_lines: Vec<String> = tooltip_meetings
-            .iter()
-            .map(|m| self.format_tooltip_line(m, now))
-            .collect();
-
-        let tooltip = bulletize(&tooltip_lines);
-
-        let mut output = WaybarOutput::new(text, tooltip);
+        let mut output = WaybarOutput::new(text, self.format_tooltip(meetings, now));
         output.class = class;
         output
+    }
+
+    /// Formats a chip and a separately selected agenda at the same instant.
+    /// Finished agenda entries never participate in chip selection or urgency.
+    pub fn format_waybar_with_tooltip_at(
+        &self,
+        meetings: &[MeetingView],
+        tooltip_meetings: &[MeetingView],
+        no_meeting_text: &str,
+        now: DateTime<Local>,
+    ) -> WaybarOutput {
+        let mut output = self.format_waybar_at(meetings, no_meeting_text, now);
+        if !tooltip_meetings.is_empty() {
+            output.tooltip = self.format_tooltip(tooltip_meetings, now);
+        }
+        output
+    }
+
+    fn format_tooltip(&self, meetings: &[MeetingView], now: DateTime<Local>) -> String {
+        let lines: Vec<_> = meetings
+            .iter()
+            .take(self.options.tooltip_limit.unwrap_or(usize::MAX))
+            .map(|m| self.format_tooltip_line(m, now))
+            .collect();
+        bulletize(&lines)
     }
 
     /// Wraps minute text in Pango `<span>` with configured notification colors.
@@ -479,7 +490,11 @@ impl OutputFormatter {
             .unwrap_or("");
         let calendar_url = meeting.calendar_url.as_deref().unwrap_or("");
         let minutes_until = meeting.minutes_until_start(now);
-        let when = self.format_time(meeting, now, waybar_markup);
+        let when = if meeting.has_ended_at(now) {
+            self.format_absolute_time(meeting)
+        } else {
+            self.format_time(meeting, now, waybar_markup)
+        };
 
         template
             .replace("{title}", &title)

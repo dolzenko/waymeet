@@ -86,6 +86,9 @@ pub struct DisplaySettings {
     /// Maximum number of meetings in tooltip.
     pub tooltip_limit: Option<usize>,
 
+    /// Include finished events from today in the Waybar tooltip only.
+    pub tooltip_include_past_today: bool,
+
     /// Whether to show all-day meetings in Waybar output.
     pub waybar_show_all_day: Option<bool>,
 
@@ -107,6 +110,7 @@ impl Default for DisplaySettings {
             until_offset: None,
             time_format: None,
             tooltip_limit: None,
+            tooltip_include_past_today: false,
             waybar_show_all_day: None,
             all_day_meeting_hours: None,
             open_with: None,

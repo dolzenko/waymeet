@@ -796,3 +796,30 @@ fn golden_until_offset_beyond_threshold() {
 
     insta::assert_debug_snapshot!("tty_until_offset_beyond", output);
 }
+
+#[test]
+fn daily_tooltip_keeps_finished_events_out_of_chip() {
+    let now = utc(2026, 10, 9, 15, 0, 0);
+    let past = sample_meeting(now, -120, "Morning <reminder>");
+    let next = sample_meeting(now, 60, "Next meeting");
+    let tomorrow = sample_meeting(now, 1200, "Tomorrow meeting");
+    let formatter = OutputFormatter::with_defaults();
+    let tooltip = [past.clone(), next.clone(), tomorrow.clone()];
+    let output = formatter.format_waybar_with_tooltip_at(
+        &[next, tomorrow],
+        &tooltip,
+        "No meeting",
+        local_from_utc(now),
+    );
+    assert!(!output.text.contains("Morning"));
+    assert!(output.text.contains("Next meeting"));
+    assert!(output.tooltip.contains("Morning &lt;reminder&gt;"));
+    assert!(output.tooltip.contains("Tomorrow meeting"));
+    assert_eq!(output.class.as_deref(), Some("upcoming"));
+    let output =
+        formatter.format_waybar_with_tooltip_at(&[], &[past], "No meeting", local_from_utc(now));
+    assert_eq!(output.text, "No meeting");
+    assert_eq!(output.class, None);
+    assert!(output.tooltip.contains("Morning &lt;reminder&gt;"));
+    assert!(!output.tooltip.contains("No upcoming meetings"));
+}

@@ -9,6 +9,10 @@ use waymeet_core::{EventTime, MeetingView, NormalizedEvent};
 use waymeet_protocol::{Envelope, Request, Response};
 
 async fn render(offset: Option<i64>) -> serde_json::Value {
+    render_case(offset, false).await
+}
+
+async fn render_case(offset: Option<i64>, with_history: bool) -> serde_json::Value {
     // Optional overrides exercise an installed binary and only the display table
     // of a local configuration. Provider credentials are never resolved or copied.
     let config_path = std::env::var_os("WAYMEET_TEST_DISPLAY_CONFIG")
@@ -25,6 +29,21 @@ async fn render(offset: Option<i64>) -> serde_json::Value {
         .as_table_mut()
         .unwrap()
         .insert("display".into(), source["display"].clone());
+    if with_history {
+        let filters: toml::Value = toml::from_str("limit = 1").unwrap();
+        config
+            .as_table_mut()
+            .unwrap()
+            .insert("filters".into(), filters);
+        config["display"].as_table_mut().unwrap().insert(
+            "tooltip_include_past_today".into(),
+            toml::Value::Boolean(true),
+        );
+    }
+    let agenda_enabled = config["display"]
+        .get("tooltip_include_past_today")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
@@ -32,7 +51,7 @@ async fn render(offset: Option<i64>) -> serde_json::Value {
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
 
     let now = Utc::now();
-    let meetings = offset
+    let meetings: Vec<_> = offset
         .into_iter()
         .map(|minutes| {
             let start = now + chrono::Duration::minutes(minutes);
@@ -46,19 +65,59 @@ async fn render(offset: Option<i64>) -> serde_json::Value {
             MeetingView::from_event(&event, now)
         })
         .collect();
+    let mut agenda = meetings.clone();
+    if with_history {
+        let start = Local::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc);
+        let event = NormalizedEvent::new(
+            "past",
+            "Morning reminder",
+            EventTime::from_utc(start),
+            EventTime::from_utc(start),
+            "test",
+        );
+        agenda.insert(0, MeetingView::from_event(&event, now));
+    }
     let server = async {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let length = stream.read_u32().await.unwrap();
-        assert!(length <= waymeet_protocol::MAX_MESSAGE_SIZE);
-        let mut body = vec![0; length as usize];
-        stream.read_exact(&mut body).await.unwrap();
-        let request: Envelope<Request> = serde_json::from_slice(&body).unwrap();
-        assert!(matches!(request.payload, Request::GetMeetings { .. }));
-        let response = Envelope::response(request.request_id, Response::meetings(meetings));
-        stream
-            .write_all(&waymeet_protocol::encode_message(&response).unwrap())
-            .await
-            .unwrap();
+        for include_past in [false, true]
+            .into_iter()
+            .take(if agenda_enabled { 2 } else { 1 })
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let length = stream.read_u32().await.unwrap();
+            assert!(length <= waymeet_protocol::MAX_MESSAGE_SIZE);
+            let mut body = vec![0; length as usize];
+            stream.read_exact(&mut body).await.unwrap();
+            let request: Envelope<Request> = serde_json::from_slice(&body).unwrap();
+            let Request::GetMeetings { filter } = request.payload else {
+                panic!("Expected meetings request")
+            };
+            assert_eq!(
+                filter.as_ref().is_some_and(|f| f.include_past_today),
+                include_past
+            );
+            if include_past {
+                assert!(filter.unwrap().limit.is_none());
+            }
+            let response = Envelope::response(
+                request.request_id,
+                Response::meetings(if include_past {
+                    agenda.clone()
+                } else {
+                    meetings.clone()
+                }),
+            );
+            stream
+                .write_all(&waymeet_protocol::encode_message(&response).unwrap())
+                .await
+                .unwrap();
+        }
     };
     let binary = std::env::var_os("WAYMEET_TEST_BINARY")
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_waymeet").into());
@@ -127,4 +186,43 @@ async fn empty_calendar_has_no_unexpanded_template() {
     let output = render(None).await;
     assert!(!output["text"].as_str().unwrap().is_empty());
     assert_eq!(output["tooltip"], "No upcoming meetings");
+}
+
+#[tokio::test]
+async fn agenda_does_not_replace_upcoming_chip_with_finished_event() {
+    let output = render_case(Some(15), true).await;
+    assert!(
+        !output["text"]
+            .as_str()
+            .unwrap()
+            .contains("Morning reminder")
+    );
+    assert!(
+        output["tooltip"]
+            .as_str()
+            .unwrap()
+            .contains("Morning reminder")
+    );
+    assert_eq!(output["class"], "upcoming");
+}
+
+#[tokio::test]
+async fn finished_events_remain_in_tooltip_with_no_upcoming_chip() {
+    let output = render_case(None, true).await;
+    assert!(
+        !output["text"]
+            .as_str()
+            .unwrap()
+            .contains("Morning reminder")
+    );
+    assert!(
+        output["tooltip"]
+            .as_str()
+            .unwrap()
+            .contains("Morning reminder")
+    );
+    assert!(output["class"].is_null());
+    let tooltip = output["tooltip"].as_str().unwrap();
+    assert!(!tooltip.contains("Now"));
+    assert!(tooltip.contains("00:00"));
 }

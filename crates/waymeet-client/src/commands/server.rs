@@ -336,6 +336,21 @@ fn build_notify_config(config: &ClientConfig) -> NotifyConfig {
     notify_config
 }
 
+/// Uses local calendar midnight, rather than a fixed 24-hour lookbehind.
+fn sync_window<T: chrono::TimeZone>(now: chrono::DateTime<T>) -> Result<TimeWindow, String> {
+    let start = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(now.timezone())
+        .earliest()
+        .ok_or("Could not determine the start of the local calendar day")?;
+    Ok(TimeWindow::new(
+        start.with_timezone(&Utc),
+        now.with_timezone(&Utc) + chrono::Duration::hours(24),
+    ))
+}
+
 /// Fetches events from all providers, normalizes them, and updates shared state.
 async fn sync_all_providers(
     providers: &[Box<dyn CalendarProvider>],
@@ -343,8 +358,8 @@ async fn sync_all_providers(
 ) -> Result<(), String> {
     let now = Utc::now();
 
-    // Fetch events for the next 24 hours (a reasonable default window)
-    let time_window = TimeWindow::from_duration(now, chrono::Duration::hours(24));
+    // Keep today's history for agenda tooltips, plus the next 24 hours.
+    let time_window = sync_window(now.with_timezone(&chrono::Local))?;
     let fetch_options = FetchOptions::new()
         .with_time_window(time_window)
         .with_expand_recurring(true);
@@ -438,6 +453,22 @@ mod tests {
     use super::*;
     use crate::config::ClientConfig;
     use waymeet_providers::ProviderError;
+
+    #[test]
+    fn agenda_window_starts_at_local_midnight_and_keeps_24_hours_ahead() {
+        use chrono::{FixedOffset, TimeZone};
+        let zone = FixedOffset::east_opt(3 * 3600).unwrap();
+        let now = zone.with_ymd_and_hms(2026, 10, 9, 15, 0, 0).unwrap();
+        let window = sync_window(now).unwrap();
+        assert_eq!(
+            window.start,
+            Utc.with_ymd_and_hms(2026, 10, 8, 21, 0, 0).unwrap()
+        );
+        assert_eq!(
+            window.end,
+            Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 0).unwrap()
+        );
+    }
 
     #[test]
     fn map_provider_error_maps_not_found() {

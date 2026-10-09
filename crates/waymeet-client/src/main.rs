@@ -164,7 +164,7 @@ async fn run_default(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
     }
 
     // Fetch meetings from the server
-    let meetings = fetch_meetings(cli, config, &client).await?;
+    let meetings = fetch_meetings(cli, config, &client, false).await?;
 
     // Handle action flags (open/copy) before rendering
     if cli.open_meet_url {
@@ -204,8 +204,14 @@ async fn run_default(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
         return waymeet_client::actions::open_calendar_day(&meetings, domain);
     }
 
-    // Render output
-    render_output(cli, config, &meetings);
+    let tooltip_meetings = if cli.output_format() == OutputFormat::Waybar
+        && config.display.tooltip_include_past_today
+    {
+        fetch_meetings(cli, config, &client, true).await?
+    } else {
+        meetings.clone()
+    };
+    render_output(cli, config, &meetings, &tooltip_meetings);
 
     Ok(())
 }
@@ -237,9 +243,14 @@ async fn fetch_meetings(
     cli: &Cli,
     config: &ClientConfig,
     client: &SocketClient,
+    include_past_today: bool,
 ) -> ClientResult<Vec<MeetingView>> {
-    // Build filter from config and CLI
-    let filter = build_filter(cli, config);
+    let mut filter = build_filter(cli, config);
+    filter.include_past_today = include_past_today;
+    if include_past_today {
+        // The chip's result limit must not truncate the daily agenda.
+        filter.limit = None;
+    }
     let request = if filter_is_empty(&filter) {
         Request::get_meetings()
     } else {
@@ -362,6 +373,7 @@ fn build_filter(cli: &Cli, config: &ClientConfig) -> MeetingsFilter {
 /// Returns true if the filter has no constraints.
 fn filter_is_empty(filter: &MeetingsFilter) -> bool {
     !filter.today_only
+        && !filter.include_past_today
         && filter.limit.is_none()
         && !filter.skip_all_day
         && filter.include_titles.is_empty()
@@ -379,7 +391,12 @@ fn filter_is_empty(filter: &MeetingsFilter) -> bool {
 }
 
 /// Renders meetings to stdout based on the output format.
-fn render_output(cli: &Cli, config: &ClientConfig, meetings: &[MeetingView]) {
+fn render_output(
+    cli: &Cli,
+    config: &ClientConfig,
+    meetings: &[MeetingView],
+    tooltip_meetings: &[MeetingView],
+) {
     let format = cli.output_format();
     let display = &config.display;
     let notifications = &config.notifications;
@@ -437,7 +454,16 @@ fn render_output(cli: &Cli, config: &ClientConfig, meetings: &[MeetingView]) {
 
     match format {
         OutputFormat::Waybar => {
-            let output = formatter.format_waybar(meetings, no_meeting_text);
+            let output = if display.tooltip_include_past_today {
+                formatter.format_waybar_with_tooltip_at(
+                    meetings,
+                    tooltip_meetings,
+                    no_meeting_text,
+                    chrono::Local::now(),
+                )
+            } else {
+                formatter.format_waybar(meetings, no_meeting_text)
+            };
             // serde_json output for waybar
             match serde_json::to_string(&output) {
                 Ok(json) => println!("{}", json),
