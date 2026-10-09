@@ -475,12 +475,11 @@ fn normalize_zoom(url: &str, is_gov: bool) -> EventLink {
 
     if segments.len() >= 2 {
         match segments[0] {
-            "j" | "my" | "w" | "wc" => {
+            "j" | "my" | "w" | "wc"
                 // /j/<id>, /my/<id>, /w/<id>, /wc/<id>
-                if meeting_id.is_none() {
+                if meeting_id.is_none() => {
                     meeting_id = Some(segments[1].to_string());
                 }
-            }
             "join" => {
                 // /join?confno=<id> - meeting ID already extracted from query
             }
