@@ -33,6 +33,16 @@ password = "env::WAYMEET_CALDAV_PASSWORD"
 # lookahead_hours = 48
 # insecure_tls = false
 
+# Native read-only HTTP iCalendar subscription (optional):
+# [[ics]]
+# name = "work"
+# url_file = "/home/you/.config/waymeet/work-ics-url" # URL-only file, mode 0600
+# url = "env::WAYMEET_ICS_URL"                      # use url OR url_file
+# timezone = "Europe/London"                      # floating-time fallback
+# user_agent = "Mozilla/5.0"                       # for header-sensitive OWA
+# [ics.timezone_aliases]
+# "Custom Office Time" = "Europe/London"
+
 # Display timing notes:
 # - Near-term meetings are shown as relative text (`In 15 minutes`).
 # - Meetings beyond `display.until_offset` (default 60 minutes) are shown as absolute time.

@@ -292,3 +292,20 @@ Credential resolution supports:
 - Run `cargo clippy --all --all-features --fix`.
 - Add tests for new or changed functionality.
 - Keep coverage expectations high.
+
+## HTTP ICS subscriptions
+
+The optional `ics` feature (enabled by default) adds one `IcsProvider` per
+`[[ics]]` entry. It uses the existing `CalendarProvider` interface and scheduler,
+with names such as `ics:work`. URLs remain private transport configuration;
+calendar IDs use the configured name, and recurring event IDs use UID plus the
+original occurrence timestamp, including for moved exceptions.
+
+The `ical` parser preserves properties and recurrence exceptions. `rrule`
+expands bounded windows in local time, with `chrono-tz` and Unicode CLDR's
+`windows-timezones` mappings. Localised/custom TZIDs require explicit aliases.
+No additional native dependencies or toolchain changes are required. Parser
+errors deliberately exclude payload text and URLs. HTTP bodies and validators
+are cached only after complete parsing/expansion succeeds; a 304 re-expands the
+cached body against the new window rather than returning `not_modified`.
+Existing per-provider last-known-good retention handles download/parse failures.

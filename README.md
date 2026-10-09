@@ -8,7 +8,7 @@ and supports quick meeting actions.
 
 ## Features
 
-- Google Calendar and CalDAV provider support.
+- Google Calendar, CalDAV, and read-only ICS subscription support.
 - Terminal, JSON, and Waybar outputs.
 - Google event actions: edit in calendar, decline, and delete.
 - Detects meeting links for Zoom, Meet, Teams, Webex, Jitsi, and more.
@@ -84,6 +84,48 @@ username = "env::WAYMEET_CALDAV_USER"
 password = "env::WAYMEET_CALDAV_PASSWORD"
 calendar_hint = "work"
 ```
+
+### ICS subscriptions (including Outlook/OWA)
+
+Subscribe directly to an HTTP(S) or `webcal://` iCalendar feed; no CalDAV server
+is required. Each subscription has a unique name and is read-only:
+
+```toml
+[[ics]]
+name = "work"
+url_file = "/home/you/.config/waymeet/work-ics-url"
+timezone = "Europe/London"
+# Alternatively: url = "env::WAYMEET_ICS_URL" (also accepts pass:: references)
+# Some published OWA feeds require a browser-style User-Agent:
+# user_agent = "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/143.0"
+
+# Map localised or custom TZIDs explicitly when necessary:
+# [ics.timezone_aliases]
+# "Custom Office Time" = "Europe/London"
+```
+
+Store only the feed URL in `url_file` and restrict its permissions to `0600`.
+Published calendar URLs may grant access without a password. WayMeet never uses
+these URLs as calendar IDs or includes them in provider errors. `webcal://`
+becomes HTTPS. HTTP feeds use TLS verification, a 30-second timeout, an 8 MiB
+response limit, and conditional requests using ETag/Last-Modified.
+
+ICS subscriptions use the daemon's existing sync interval. Recurring events
+are expanded locally for the requested time window, including `RRULE`, `RDATE`,
+`EXDATE`, and individual `RECURRENCE-ID` edits/cancellations. Occurrence IDs remain
+stable when a meeting is moved. Windows timezone names are mapped through Unicode
+CLDR; IANA timezone rules preserve local meeting times across DST changes.
+Floating times use `X-WR-TIMEZONE`, or the configured `timezone` (UTC by default).
+Custom `VTIMEZONE` definitions are not evaluated; use `timezone_aliases` to map
+such identifiers to an equivalent IANA zone. Start-relative DISPLAY/AUDIO alarms
+supply reminder offsets; otherwise the ordinary notification fallback applies.
+
+Unsupported recurrence features (`RANGE=THISANDFUTURE`, `RDATE;VALUE=PERIOD`,
+`EXRULE`), unknown timezones, malformed calendars, and expansion-limit failures
+report a provider error and preserve the last good events. A valid empty feed
+clears them. Cached feeds are re-expanded even after HTTP 304, so meetings enter
+and leave the moving query window correctly. Feed changes cannot be written back;
+Google-only decline/delete actions are unavailable for ICS subscriptions.
 
 ### Run it
 

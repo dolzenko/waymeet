@@ -6,9 +6,11 @@ license.workspace = true
 description = "CalendarProvider trait and implementations (Google, CalDAV)"
 
 [features]
-default = ["caldav"]
+default = ["caldav", "ics"]
 caldav = ["dep:reqwest", "dep:icalendar", "dep:md5", "dep:base64", "dep:rand", "dep:quick-xml", "dep:tokio"]
 google = ["dep:reqwest", "dep:base64", "dep:rand", "dep:sha2", "dep:open", "dep:dirs", "dep:tokio"]
+
+ics = ["dep:reqwest", "dep:ical", "dep:rrule", "dep:windows-timezones", "dep:chrono-tz", "dep:tokio"]
 
 [dependencies]
 waymeet-core = { path = "../waymeet-core" }
@@ -20,6 +22,12 @@ thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
 urlencoding.workspace = true
+
+# ICS dependencies (pure Rust; no new native libraries)
+ical = { version = "0.11", default-features = false, features = ["ical"], optional = true }
+chrono-tz = { version = "0.10", optional = true }
+rrule = { version = "0.14", optional = true }
+windows-timezones = { version = "0.5", optional = true }
 
 # CalDAV dependencies (optional)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2"], optional = true }

@@ -24,6 +24,10 @@ pub struct ClientConfig {
     #[cfg(feature = "caldav")]
     pub caldav: Option<CalDavSettings>,
 
+    /// Read-only HTTP iCalendar subscriptions.
+    #[cfg(feature = "ics")]
+    pub ics: Vec<IcsSettings>,
+
     /// Google Calendar settings.
     #[cfg(feature = "google")]
     pub google: Option<GoogleSettings>,
@@ -1107,5 +1111,130 @@ mod notification_settings_tests {
             ..NotificationSettings::default()
         };
         assert!(settings.validate_end_warning().is_ok());
+    }
+}
+
+/// A read-only subscription. Keep access-bearing URLs in `url_file` or an env reference.
+#[cfg(feature = "ics")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct IcsSettings {
+    pub name: String,
+    pub url: Option<String>,
+    pub url_file: Option<PathBuf>,
+    pub timezone: Option<String>,
+    pub timezone_aliases: std::collections::BTreeMap<String, String>,
+    pub user_agent: Option<String>,
+}
+
+#[cfg(feature = "ics")]
+impl IcsSettings {
+    pub fn to_provider_config(&self) -> Result<waymeet_providers::ics::IcsConfig, String> {
+        let url = match (&self.url, &self.url_file) {
+            (Some(url), None) => crate::secret::resolve(url)
+                .map_err(|_| "Could not resolve ICS URL reference".to_string())?,
+            (None, Some(path)) => std::fs::read_to_string(path)
+                .map_err(|_| "Could not read ICS url_file".to_string())?,
+            _ => return Err("Set exactly one of ICS url or url_file".into()),
+        };
+        let mut config = waymeet_providers::ics::IcsConfig::new(&self.name, url.trim())
+            .map_err(|e| e.to_string())?;
+        if let Some(tz) = &self.timezone {
+            config.timezone = tz.clone();
+        }
+        config.timezone_aliases = self.timezone_aliases.clone();
+        if let Some(ua) = &self.user_agent {
+            config.user_agent = ua.clone();
+        }
+        config.validate().map_err(|e| e.to_string())?;
+        Ok(config)
+    }
+}
+
+#[cfg(feature = "ics")]
+pub fn validate_ics(settings: &[IcsSettings]) -> Result<(), String> {
+    let mut names = std::collections::HashSet::new();
+    for feed in settings {
+        if !names.insert(&feed.name) {
+            return Err("ICS feed names must be unique".into());
+        }
+        feed.to_provider_config()?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "ics"))]
+mod ics_tests {
+    use super::*;
+
+    #[test]
+    fn url_file_and_multiple_subscriptions_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("url");
+        std::fs::write(&file, "https://example.org/private.ics\n").unwrap();
+        let config: ClientConfig = toml::from_str(&format!(
+            r#"
+[[ics]]
+name = "work"
+url_file = {:?}
+timezone = "Europe/Moscow"
+user_agent = "Mozilla/5.0"
+[ics.timezone_aliases]
+"Custom Zone" = "Asia/Barnaul"
+[[ics]]
+name = "holidays"
+url = "webcal://example.org/holidays.ics"
+"#,
+            file.to_str().unwrap()
+        ))
+        .unwrap();
+        validate_ics(&config.ics).unwrap();
+        assert_eq!(config.ics.len(), 2);
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(!serialized.contains("private.ics"));
+        let round_trip: ClientConfig = toml::from_str(&serialized).unwrap();
+        validate_ics(&round_trip.ics).unwrap();
+    }
+
+    #[test]
+    fn invalid_or_ambiguous_settings_are_rejected() {
+        for settings in [
+            IcsSettings::default(),
+            IcsSettings {
+                name: "work".into(),
+                url: Some("file:///tmp/a".into()),
+                ..Default::default()
+            },
+            IcsSettings {
+                name: "work".into(),
+                url: Some("https://example.org".into()),
+                url_file: Some("unused".into()),
+                ..Default::default()
+            },
+            IcsSettings {
+                name: "work".into(),
+                url_file: Some("/nonexistent-waymeet-file".into()),
+                ..Default::default()
+            },
+            IcsSettings {
+                name: "work".into(),
+                url: Some("env::_WAYMEET_ABSENT_ICS_URL_6941".into()),
+                ..Default::default()
+            },
+            IcsSettings {
+                name: "work".into(),
+                url: Some("https://example.org".into()),
+                timezone: Some("Unknown/Zone".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(settings.to_provider_config().is_err());
+        }
+        let settings = IcsSettings {
+            name: "work".into(),
+            url: Some("https://example.org".into()),
+            ..Default::default()
+        };
+        assert!(validate_ics(&[settings.clone(), settings]).is_err());
     }
 }

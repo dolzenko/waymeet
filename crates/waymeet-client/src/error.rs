@@ -56,7 +56,7 @@ impl From<std::io::Error> for ClientError {
     }
 }
 
-#[cfg(any(feature = "google", feature = "caldav"))]
+#[cfg(any(feature = "google", feature = "caldav", feature = "ics"))]
 impl From<waymeet_providers::ProviderError> for ClientError {
     fn from(err: waymeet_providers::ProviderError) -> Self {
         Self::Provider(err.to_string())

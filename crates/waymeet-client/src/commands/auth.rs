@@ -682,6 +682,14 @@ pub async fn status(config: &ClientConfig) -> ClientResult<()> {
         }
     }
 
+    #[cfg(feature = "ics")]
+    for feed in &config.ics {
+        any = true;
+        println!("ics:{}", feed.name);
+        println!("  status:       read-only subscription (checked at fetch time)");
+        println!();
+    }
+
     if !any {
         println!("No calendar accounts configured.");
         println!("Run `waymeet auth google --guide` to set up Google Calendar.");

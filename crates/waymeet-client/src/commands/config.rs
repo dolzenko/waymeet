@@ -16,6 +16,9 @@ pub fn dump(config: &ClientConfig) -> ClientResult<()> {
 
 /// Validate the configuration.
 pub fn validate(config: &ClientConfig) -> ClientResult<()> {
+    #[cfg(feature = "ics")]
+    crate::config::validate_ics(&config.ics).map_err(crate::error::ClientError::Config)?;
+
     #[cfg(feature = "caldav")]
     if let Some(ref caldav) = config.caldav {
         caldav.validate().map_err(|e| {

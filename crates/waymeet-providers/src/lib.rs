@@ -49,6 +49,8 @@ pub mod caldav;
 pub mod error;
 #[cfg(feature = "google")]
 pub mod google;
+#[cfg(feature = "ics")]
+pub mod ics;
 pub mod normalize;
 pub mod provider;
 pub mod raw_event;

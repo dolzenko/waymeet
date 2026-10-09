@@ -10,7 +10,8 @@ name = "waymeet"
 path = "src/main.rs"
 
 [features]
-default = ["google", "caldav"]
+default = ["google", "caldav", "ics"]
+ics = ["waymeet-providers/ics"]
 caldav = ["waymeet-providers/caldav"]
 google = ["waymeet-providers/google"]
 

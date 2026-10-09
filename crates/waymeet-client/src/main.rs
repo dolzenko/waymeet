@@ -6,7 +6,9 @@ use std::time::Duration;
 use clap::Parser;
 use tracing::{debug, info};
 
-use waymeet_client::cli::{AuthProvider, Cli, Command, ConfigAction};
+#[cfg(feature = "google")]
+use waymeet_client::cli::AuthProvider;
+use waymeet_client::cli::{Cli, Command, ConfigAction};
 use waymeet_client::config::ClientConfig;
 use waymeet_client::error::{ClientError, ClientResult};
 use waymeet_client::socket::SocketClient;
@@ -70,49 +72,57 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli, config: ClientConfig) -> ClientResult<()> {
     // Handle subcommands
     match cli.command {
-        Some(Command::Auth { provider }) => match provider {
+        Some(Command::Auth { provider }) => {
+            #[cfg(not(feature = "google"))]
+            {
+                let _ = provider;
+                Err(ClientError::Config("This build has no OAuth authentication; configure an ICS or CalDAV source and use `waymeet config validate`".into()))
+            }
             #[cfg(feature = "google")]
-            Some(AuthProvider::Google {
-                account,
-                guide,
-                client_id,
-                client_secret,
-                credentials_file,
-                domain,
-                force,
-                no_browser,
-                read_only,
-            }) => {
-                if guide {
-                    return waymeet_client::commands::auth::google_guide(&config).await;
-                }
+            match provider {
+                #[cfg(feature = "google")]
+                Some(AuthProvider::Google {
+                    account,
+                    guide,
+                    client_id,
+                    client_secret,
+                    credentials_file,
+                    domain,
+                    force,
+                    no_browser,
+                    read_only,
+                }) => {
+                    if guide {
+                        return waymeet_client::commands::auth::google_guide(&config).await;
+                    }
 
-                waymeet_client::commands::auth::google(
-                    waymeet_client::commands::auth::GoogleAuthRequest {
-                        account,
-                        client_id,
-                        client_secret,
-                        credentials_file,
-                        domain,
-                        force,
-                        no_browser,
-                        read_only,
-                    },
-                    &config,
-                )
-                .await
-            }
-            Some(AuthProvider::Status) => waymeet_client::commands::auth::status(&config).await,
-            Some(AuthProvider::Logout { account, revoke }) => {
-                waymeet_client::commands::auth::logout(account, revoke, &config).await
-            }
-            None => {
-                if !has_calendar_configuration(&config) {
-                    return waymeet_client::commands::auth::google_guide(&config).await;
+                    waymeet_client::commands::auth::google(
+                        waymeet_client::commands::auth::GoogleAuthRequest {
+                            account,
+                            client_id,
+                            client_secret,
+                            credentials_file,
+                            domain,
+                            force,
+                            no_browser,
+                            read_only,
+                        },
+                        &config,
+                    )
+                    .await
                 }
-                waymeet_client::commands::auth::status(&config).await
+                Some(AuthProvider::Status) => waymeet_client::commands::auth::status(&config).await,
+                Some(AuthProvider::Logout { account, revoke }) => {
+                    waymeet_client::commands::auth::logout(account, revoke, &config).await
+                }
+                None => {
+                    if !has_calendar_configuration(&config) {
+                        return waymeet_client::commands::auth::google_guide(&config).await;
+                    }
+                    waymeet_client::commands::auth::status(&config).await
+                }
             }
-        },
+        }
         Some(Command::Config { action }) => match action {
             ConfigAction::Dump => waymeet_client::commands::config::dump(&config),
             ConfigAction::Validate => waymeet_client::commands::config::validate(&config),
@@ -133,7 +143,12 @@ async fn run(cli: Cli, config: ClientConfig) -> ClientResult<()> {
 /// Default mode: connect to the server, fetch meetings, and render output.
 async fn run_default(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
     if !has_calendar_configuration(config) {
+        #[cfg(feature = "google")]
         return waymeet_client::commands::auth::google_guide(config).await;
+        #[cfg(not(feature = "google"))]
+        return Err(ClientError::Config(
+            "No calendar providers configured; add an [[ics]] or [caldav] section".into(),
+        ));
     }
 
     let client = make_client(cli, config);
@@ -197,6 +212,11 @@ async fn run_default(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
 
 /// Returns true when at least one calendar provider is configured.
 fn has_calendar_configuration(config: &ClientConfig) -> bool {
+    #[cfg(feature = "ics")]
+    if !config.ics.is_empty() {
+        return true;
+    }
+
     #[cfg(feature = "google")]
     if let Some(google) = &config.google
         && !google.accounts.is_empty()

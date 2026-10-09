@@ -53,7 +53,7 @@ pub async fn run(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
             "no calendar providers configured. To fix this, either:\n  \
              1. Run: waymeet auth google --guide\n  \
              2. Run: waymeet auth google --credentials-file /path/to/client_secret_<id>.json\n  \
-             3. Add a [caldav] or [[google.accounts]] section in {}",
+             3. Add a [[ics]], [caldav] or [[google.accounts]] section in {}",
             config_path.display()
         )));
     }
@@ -211,6 +211,17 @@ pub async fn run(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
 /// Builds calendar providers from client configuration.
 fn build_providers(config: &ClientConfig) -> ClientResult<Vec<Box<dyn CalendarProvider>>> {
     let mut providers: Vec<Box<dyn CalendarProvider>> = Vec::new();
+
+    #[cfg(feature = "ics")]
+    {
+        crate::config::validate_ics(&config.ics).map_err(ClientError::Config)?;
+        for feed in &config.ics {
+            let settings = feed.to_provider_config().map_err(ClientError::Config)?;
+            providers.push(Box::new(waymeet_providers::ics::IcsProvider::new(
+                settings,
+            )?));
+        }
+    }
 
     #[cfg(feature = "caldav")]
     {
