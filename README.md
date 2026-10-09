@@ -28,6 +28,13 @@ Install the CLI:
 cargo install --path crates/waymeet-client
 ```
 
+### Arch Linux package (this fork)
+
+From `packaging/arch`, run `makepkg -si` to build and install the current checkout
+as `waymeet-ics`. This installs `/usr/bin/waymeet` and a user systemd unit. After
+configuring a provider, set `[server] auto_start = false` and run
+`systemctl --user enable --now waymeet.service` for supervised background sync.
+
 ## Quick Start
 
 ### Google Calendar

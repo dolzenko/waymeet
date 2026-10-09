@@ -1,0 +1,27 @@
+# Build the checked-out fork, including reviewed local changes.
+pkgname=waymeet-ics
+pkgver=0.1.0.ics1
+pkgrel=1
+pkgdesc='WayMeet calendar daemon and Waybar client with native ICS subscriptions'
+arch=('x86_64' 'aarch64')
+url='https://github.com/dolzenko/waymeet'
+license=('Apache-2.0')
+depends=('glibc' 'gcc-libs' 'libxcb')
+makedepends=('cargo')
+provides=('waymeet')
+conflicts=('waymeet')
+# Native GCC LTO objects from ring cannot be linked by Rust's LLVM linker.
+options=('!debug' '!lto')
+
+build() {
+  cd "${WAYMEET_SOURCE_DIR:-$startdir/../..}"
+  cargo build --release --locked -p waymeet-client
+}
+
+package() {
+  cd "${WAYMEET_SOURCE_DIR:-$startdir/../..}"
+  install -Dm755 target/release/waymeet "$pkgdir/usr/bin/waymeet"
+  install -Dm644 systemd/waymeet.service "$pkgdir/usr/lib/systemd/user/waymeet.service"
+  install -Dm644 config.example.toml "$pkgdir/usr/share/doc/waymeet/config.example.toml"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/waymeet/README.md"
+}

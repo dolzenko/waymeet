@@ -1,2 +1,7 @@
 target
 .pre-commit
+
+# Local Arch package artefacts
+/packaging/arch/pkg/
+/packaging/arch/src/
+/packaging/arch/*.pkg.tar.*
