@@ -152,6 +152,7 @@ The CLI starts the daemon automatically when needed.
 - `waymeet --open-calendar-day`
 - `waymeet --open-link-from-clipboard`
 - `waymeet --create meet|zoom|teams|gcal`
+- `waymeet --json status` — machine-readable daemon and provider health
 - `waymeet --refresh`
 - `waymeet --snooze N`
 

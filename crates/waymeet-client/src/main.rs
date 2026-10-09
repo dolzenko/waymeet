@@ -130,7 +130,7 @@ async fn run(cli: Cli, config: ClientConfig) -> ClientResult<()> {
         },
         Some(Command::Status) => {
             let client = make_client(&cli, &config);
-            run_status(&client).await
+            run_status(&client, cli.json).await
         }
         Some(Command::Server) => waymeet_client::commands::server::run(&cli, &config).await,
         None => {
@@ -466,11 +466,19 @@ fn render_output(cli: &Cli, config: &ClientConfig, meetings: &[MeetingView]) {
 }
 
 /// Runs the status command.
-async fn run_status(client: &SocketClient) -> ClientResult<()> {
+async fn run_status(client: &SocketClient, json: bool) -> ClientResult<()> {
     let response = client.send(Request::Status).await?;
 
     match response {
         Response::Status { info } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&info)
+                        .map_err(|e| ClientError::Protocol(e.to_string()))?
+                );
+                return Ok(());
+            }
             let uptime_str = format_duration_human(info.uptime_seconds);
             println!("Server status:");
             println!("  Uptime: {}", uptime_str);
