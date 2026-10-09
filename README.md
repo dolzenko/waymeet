@@ -168,6 +168,10 @@ Use `config.example.toml` as a template. Validate the resulting file with:
 waymeet config validate
 ```
 
+For a countdown followed by the meeting title, use `format = "{when} · {title}"`
+in `[display]`. The time placeholder is `{when}`; `{start_time}` and `{end_time}`
+provide clock times. The same placeholders work in `tooltip_format`.
+
 Supply Google credentials in either of these forms:
 
 - `credentials_file = "/path/to/client_secret_<id>.json"` for the downloaded

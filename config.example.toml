@@ -50,8 +50,8 @@ password = "env::WAYMEET_CALDAV_PASSWORD"
 [display]
 max_title_length = 30             # Truncate titles with ellipsis
 no_meeting_text = "No meeting"    # Text when no meetings
-format = "{title} {time}"         # Custom format template
-tooltip_format = "{title} {time}" # Custom tooltip format template
+format = "{title} {when}"         # Custom format template
+tooltip_format = "{title} {when}" # Custom tooltip format template
 hour_separator = ":"              # Hour separator character (e.g., ":", "h")
 until_offset = 60                 # Minutes offset after which absolute time is shown
 time_format = "24h"               # Time format ("24h" or "12h")
