@@ -1,5 +1,6 @@
 //! Read-only HTTP iCalendar subscriptions. Feed URLs are treated as secrets.
 mod parse;
+mod zones;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};

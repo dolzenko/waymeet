@@ -351,3 +351,255 @@ fn all_day_recurrence_until_date_is_inclusive() {
     );
     assert!(parsed(&fields, "2026-10-04T00:00:00Z", 5).is_empty());
 }
+
+fn fixed_zone(id: &str, offset: &str) -> String {
+    format!(
+        "BEGIN:VTIMEZONE\nTZID:{id}\nBEGIN:STANDARD\nDTSTART:16010101T000000\nTZOFFSETFROM:{offset}\nTZOFFSETTO:{offset}\nEND:STANDARD\nEND:VTIMEZONE"
+    )
+}
+fn dst_zone() -> &'static str {
+    "BEGIN:VTIMEZONE\nTZID:Custom DST\nBEGIN:STANDARD\nDTSTART:20251026T030000\nTZOFFSETFROM:+0200\nTZOFFSETTO:+0100\nRRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\nEND:STANDARD\nBEGIN:DAYLIGHT\nDTSTART:20250330T020000\nTZOFFSETFROM:+0100\nTZOFFSETTO:+0200\nRRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\nEND:DAYLIGHT\nEND:VTIMEZONE"
+}
+#[test]
+fn embedded_localized_owa_identifiers_and_fractional_offsets() {
+    for (id, reference, offset, expected) in [
+        (
+            "(UTC+03:00) Moscow, St. Petersburg",
+            "(utc+03:00) Moscow\\, St. Petersburg",
+            "+0300",
+            "2026-10-12T13:00:00+00:00",
+        ),
+        (
+            "(UTC+07:00) Барнаул\\, Горно-Алтайск",
+            "(UTC+07:00) Барнаул, Горно-Алтайск",
+            "+0700",
+            "2026-10-12T09:00:00+00:00",
+        ),
+        (
+            "Opaque east",
+            "Opaque east",
+            "+0545",
+            "2026-10-12T10:15:00+00:00",
+        ),
+        (
+            "Opaque west",
+            "Opaque west",
+            "-0330",
+            "2026-10-12T19:30:00+00:00",
+        ),
+        (
+            "Historical seconds",
+            "Historical seconds",
+            "+005732",
+            "2026-10-12T15:02:28+00:00",
+        ),
+    ] {
+        let fields = format!(
+            "{}\n{}",
+            fixed_zone(id, offset),
+            event(&format!(
+                "UID:local\nDTSTART;TZID=\"{reference}\":20261012T160000"
+            ))
+        );
+        let events = parsed(&fields, "2026-10-12T00:00:00Z", 1);
+        assert_eq!(datetime(&events[0].start), expected, "{id}");
+    }
+}
+#[test]
+fn embedded_rules_are_authoritative_but_explicit_alias_wins() {
+    let fields = format!(
+        "{}\n{}",
+        fixed_zone("Europe/Berlin", "+0700"),
+        event("UID:test\nDTSTART;TZID=Europe/Berlin:20261012T160000")
+    );
+    assert_eq!(
+        datetime(&parsed(&fields, "2026-10-12T00:00:00Z", 1)[0].start),
+        "2026-10-12T09:00:00+00:00"
+    );
+    let mut cfg = config();
+    cfg.timezone_aliases
+        .insert("Europe/Berlin".into(), "Europe/Moscow".into());
+    let events = parse::events(
+        &calendar(&fields),
+        &cfg,
+        &options("2026-10-12T00:00:00Z", 1),
+    )
+    .unwrap();
+    assert_eq!(datetime(&events[0].start), "2026-10-12T13:00:00+00:00");
+}
+#[test]
+fn embedded_dst_recurrence_keeps_wall_clock_and_until_is_utc() {
+    let fields = format!(
+        "{}\n{}",
+        dst_zone(),
+        event(
+            "UID:dst\nDTSTART;TZID=Custom DST:20261024T090000\nRRULE:FREQ=DAILY;UNTIL=20261026T080000Z\nEXDATE:20261025T080000Z\nRDATE:20261027T080000Z"
+        )
+    );
+    let events = parsed(&fields, "2026-10-24T00:00:00Z", 5);
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| datetime(&e.start))
+            .collect::<Vec<_>>(),
+        vec![
+            "2026-10-24T07:00:00+00:00",
+            "2026-10-26T08:00:00+00:00",
+            "2026-10-27T08:00:00+00:00"
+        ]
+    );
+}
+#[test]
+fn embedded_gap_does_not_consume_count_and_fold_uses_first_occurrence() {
+    let fields = format!(
+        "{}\n{}",
+        dst_zone(),
+        event("UID:gap\nDTSTART;TZID=Custom DST:20260328T023000\nRRULE:FREQ=DAILY;COUNT=3")
+    );
+    let events = parsed(&fields, "2026-03-28T00:00:00Z", 5);
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| datetime(&e.start))
+            .collect::<Vec<_>>(),
+        vec![
+            "2026-03-28T01:30:00+00:00",
+            "2026-03-30T00:30:00+00:00",
+            "2026-03-31T00:30:00+00:00"
+        ]
+    );
+    let fields = format!(
+        "{}\n{}",
+        dst_zone(),
+        event("UID:fold\nDTSTART;TZID=Custom DST:20261025T023000")
+    );
+    assert_eq!(
+        datetime(&parsed(&fields, "2026-10-25T00:00:00Z", 1)[0].start),
+        "2026-10-25T00:30:00+00:00"
+    );
+}
+#[test]
+fn embedded_dst_overrides_match_utc_recurrence_ids() {
+    let fields = format!(
+        "{}\n{}\n{}\n{}",
+        dst_zone(),
+        event("UID:dst\nDTSTART;TZID=Custom DST:20261024T090000\nRRULE:FREQ=DAILY;COUNT=3"),
+        event("UID:dst\nRECURRENCE-ID:20261025T080000Z\nDTSTART;TZID=Custom DST:20261025T110000"),
+        event("UID:dst\nRECURRENCE-ID;TZID=Custom DST:20261026T090000\nSTATUS:CANCELLED")
+    );
+    let events = parsed(&fields, "2026-10-24T00:00:00Z", 4);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].id, "dst/20261025T080000Z");
+    assert_eq!(datetime(&events[1].start), "2026-10-25T10:00:00+00:00");
+}
+#[test]
+fn embedded_southern_dst_and_rdate_observances() {
+    let zone = "BEGIN:VTIMEZONE\nTZID:South\nBEGIN:DAYLIGHT\nDTSTART:20251005T020000\nTZOFFSETFROM:+1000\nTZOFFSETTO:+1100\nRRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=1SU\nEND:DAYLIGHT\nBEGIN:STANDARD\nDTSTART:20250406T030000\nTZOFFSETFROM:+1100\nTZOFFSETTO:+1000\nRDATE:20260405T030000\nEND:STANDARD\nEND:VTIMEZONE";
+    for (date, from, expected) in [
+        (
+            "20260112T160000",
+            "2026-01-12T00:00:00Z",
+            "2026-01-12T05:00:00+00:00",
+        ),
+        (
+            "20260712T160000",
+            "2026-07-12T00:00:00Z",
+            "2026-07-12T06:00:00+00:00",
+        ),
+    ] {
+        let fields = format!(
+            "{zone}\n{}",
+            event(&format!("UID:south\nDTSTART;TZID=South:{date}"))
+        );
+        assert_eq!(datetime(&parsed(&fields, from, 1)[0].start), expected);
+    }
+}
+#[test]
+fn malformed_embedded_zones_fail_instead_of_guessing_label_offsets() {
+    for zone in [
+        fixed_zone("Bad", "+2500"),
+        fixed_zone("Bad", "+0360"),
+        "BEGIN:VTIMEZONE\nTZID:Bad\nEND:VTIMEZONE".into(),
+        fixed_zone("Bad", "+0300").replace("TZOFFSETFROM:+0300\n", ""),
+    ] {
+        let fields = format!(
+            "{zone}\n{}",
+            event("UID:bad\nDTSTART;TZID=Bad:20261012T160000")
+        );
+        assert!(
+            parse::events(
+                &calendar(&fields),
+                &config(),
+                &options("2026-10-12T00:00:00Z", 1)
+            )
+            .is_err()
+        );
+    }
+    let fields = event("UID:unknown\nDTSTART;TZID=\"(UTC+03:00) Unknown place\":20261012T160000");
+    assert!(
+        parse::events(
+            &calendar(&fields),
+            &config(),
+            &options("2026-10-12T00:00:00Z", 1)
+        )
+        .is_err()
+    );
+}
+#[test]
+fn duplicate_fixed_owa_observances_are_accepted() {
+    let zone = fixed_zone("OWA", "+0300").replace("END:VTIMEZONE", "BEGIN:DAYLIGHT\nDTSTART:16010101T000000\nTZOFFSETFROM:+0300\nTZOFFSETTO:+0300\nEND:DAYLIGHT\nEND:VTIMEZONE");
+    let fields = format!(
+        "{zone}\n{}",
+        event("UID:owa\nDTSTART;TZID=OWA:20261012T160000")
+    );
+    assert_eq!(
+        datetime(&parsed(&fields, "2026-10-12T00:00:00Z", 1)[0].start),
+        "2026-10-12T13:00:00+00:00"
+    );
+}
+
+#[test]
+fn embedded_historical_rules_stop_at_utc_until() {
+    let zone = dst_zone()
+        .replace(
+            "BYMONTH=10;BYDAY=-1SU",
+            "BYMONTH=10;BYDAY=-1SU;UNTIL=20251026T010000Z",
+        )
+        .replace(
+            "BYMONTH=3;BYDAY=-1SU",
+            "BYMONTH=3;BYDAY=-1SU;UNTIL=20250330T010000Z",
+        );
+    let fields = format!(
+        "{zone}\n{}",
+        event("UID:history\nDTSTART;TZID=Custom DST:20260712T160000")
+    );
+    assert_eq!(
+        datetime(&parsed(&fields, "2026-07-12T00:00:00Z", 1)[0].start),
+        "2026-07-12T15:00:00+00:00"
+    );
+}
+#[test]
+fn embedded_finite_ancient_recurrence_does_not_hit_expansion_limit() {
+    let fields = format!(
+        "{}\n{}",
+        fixed_zone("Fixed", "+0300"),
+        event("UID:old\nDTSTART;TZID=Fixed:16010101T160000\nRRULE:FREQ=DAILY;COUNT=3")
+    );
+    assert!(parsed(&fields, "2026-10-12T00:00:00Z", 1).is_empty());
+}
+#[test]
+fn conflicting_embedded_transitions_report_error() {
+    let zone = fixed_zone("Conflict", "+0300").replace("END:VTIMEZONE", "BEGIN:DAYLIGHT\nDTSTART:16010101T000000\nTZOFFSETFROM:+0300\nTZOFFSETTO:+0400\nEND:DAYLIGHT\nEND:VTIMEZONE");
+    let fields = format!(
+        "{zone}\n{}",
+        event("UID:bad\nDTSTART;TZID=Conflict:20261012T160000")
+    );
+    assert!(
+        parse::events(
+            &calendar(&fields),
+            &config(),
+            &options("2026-10-12T00:00:00Z", 1)
+        )
+        .is_err()
+    );
+}

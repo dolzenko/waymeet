@@ -1,7 +1,7 @@
 # Build the checked-out fork, including reviewed local changes.
 pkgname=waymeet-ics
 pkgver=0.1.0.ics1
-pkgrel=3
+pkgrel=4
 pkgdesc='WayMeet calendar daemon and Waybar client with native ICS subscriptions'
 arch=('x86_64' 'aarch64')
 url='https://github.com/dolzenko/waymeet'

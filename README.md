@@ -124,8 +124,13 @@ stable when a meeting is moved. All-day recurrences accept date-only `UNTIL`
 limits, including the last date as exported by Google Calendar. Windows timezone
 names are mapped through Unicode CLDR; IANA timezone rules preserve local meeting times across DST changes.
 Floating times use `X-WR-TIMEZONE`, or the configured `timezone` (UTC by default).
-Custom `VTIMEZONE` definitions are not evaluated; use `timezone_aliases` to map
-such identifiers to an equivalent IANA zone. Start-relative DISPLAY/AUDIO alarms
+Embedded `VTIMEZONE` definitions resolve arbitrary Microsoft/OWA identifiers,
+including translated display labels and escaped commas. STANDARD/DAYLIGHT
+observances, RRULE/RDATE transitions, and fractional offsets are evaluated;
+recurring meetings retain their local time across daylight-saving changes.
+Explicit `timezone_aliases` override embedded definitions; otherwise embedded
+rules take precedence over IANA/Windows mappings. No offset is guessed from a
+label. Unknown identifiers without usable rules still report an error. Start-relative DISPLAY/AUDIO alarms
 supply reminder offsets; otherwise the ordinary notification fallback applies.
 
 Unsupported recurrence features (`RANGE=THISANDFUTURE`, `RDATE;VALUE=PERIOD`,

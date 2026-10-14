@@ -303,7 +303,15 @@ original occurrence timestamp, including for moved exceptions.
 
 The `ical` parser preserves properties and recurrence exceptions. `rrule`
 expands bounded windows in local time, with `chrono-tz` and Unicode CLDR's
-`windows-timezones` mappings. Localised/custom TZIDs require explicit aliases.
+`windows-timezones` mappings. `ics/zones.rs` also builds UTC transition tables
+from embedded VTIMEZONE observances (DTSTART, TZOFFSETFROM/TO, RRULE, RDATE).
+TZID matching unescapes text and ignores case; explicit aliases take precedence.
+Opaque zones expand event recurrence on a synthetic local clock and convert each
+occurrence through the transition table. Folds select the first occurrence;
+nonexistent generated times are skipped without consuming COUNT. Literal times
+in a gap report an error. UTC recurrence IDs preserve exception identity.
+Transition and event expansion have a 10,000-occurrence limit; malformed,
+conflicting or unsupported definitions report an error instead of guessing UTC.
 No additional native dependencies or toolchain changes are required. Parser
 errors deliberately exclude payload text and URLs. HTTP bodies and validators
 are cached only after complete parsing/expansion succeeds; a 304 re-expands the

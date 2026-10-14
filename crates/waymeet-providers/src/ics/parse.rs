@@ -8,10 +8,13 @@ use ical::property::Property;
 use rrule::{RRule, RRuleSet, Tz, Unvalidated};
 use windows_timezones::WindowsTimezone;
 
-use super::IcsConfig;
+use super::{
+    IcsConfig,
+    zones::{Zone, Zones},
+};
 use crate::{FetchOptions, ProviderError, ProviderResult, RawEvent, RawEventTime};
 
-fn invalid(message: &str) -> ProviderError {
+pub(super) fn invalid(message: &str) -> ProviderError {
     ProviderError::invalid_response(message)
 }
 
@@ -29,10 +32,10 @@ pub(super) fn timezone(name: &str, aliases: &BTreeMap<String, String>) -> Provid
 fn prop<'a>(props: &'a [Property], name: &str) -> Option<&'a Property> {
     props.iter().find(|p| p.name.eq_ignore_ascii_case(name))
 }
-fn value<'a>(props: &'a [Property], name: &str) -> Option<&'a str> {
+pub(super) fn value<'a>(props: &'a [Property], name: &str) -> Option<&'a str> {
     prop(props, name).and_then(|p| p.value.as_deref())
 }
-fn param<'a>(p: &'a Property, name: &str) -> Option<&'a str> {
+pub(super) fn param<'a>(p: &'a Property, name: &str) -> Option<&'a str> {
     p.params
         .as_ref()?
         .iter()
@@ -43,31 +46,35 @@ fn param<'a>(p: &'a Property, name: &str) -> Option<&'a str> {
 }
 
 #[derive(Clone, Copy)]
-struct Stamp {
+struct Stamp<'a> {
+    utc: DateTime<Utc>,
+    zone: Zone<'a>,
     dt: DateTime<Tz>,
     all_day: bool,
 }
-impl Stamp {
+impl Stamp<'_> {
     fn raw(self) -> RawEventTime {
         if self.all_day {
             RawEventTime::from_date(self.dt.date_naive())
         } else {
-            RawEventTime::from_datetime(self.dt.with_timezone(&Utc))
+            RawEventTime::from_datetime(self.utc)
         }
     }
     fn key(self) -> String {
         if self.all_day {
             self.dt.format("%Y%m%d").to_string()
         } else {
-            self.dt
-                .with_timezone(&Utc)
-                .format("%Y%m%dT%H%M%SZ")
-                .to_string()
+            self.utc.format("%Y%m%dT%H%M%SZ").to_string()
         }
     }
 }
 
-fn stamp(p: &Property, default_tz: Tz, config: &IcsConfig) -> ProviderResult<Stamp> {
+fn stamp<'a>(
+    p: &Property,
+    default_tz: Zone<'a>,
+    config: &IcsConfig,
+    zones: &'a Zones,
+) -> ProviderResult<Stamp<'a>> {
     let text = p
         .value
         .as_deref()
@@ -81,39 +88,61 @@ fn stamp(p: &Property, default_tz: Tz, config: &IcsConfig) -> ProviderResult<Sta
         return Ok(Stamp {
             dt: Tz::UTC.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap()),
             all_day: true,
+            utc: date.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            zone: Zone::Named(Tz::UTC),
         });
     }
     let tz = if text.ends_with('Z') {
-        Tz::UTC
+        Zone::Named(Tz::UTC)
     } else if let Some(id) = param(p, "TZID") {
-        timezone(id, &config.timezone_aliases)?
+        zones.resolve(id, config)?
     } else {
         default_tz
     };
     let local = NaiveDateTime::parse_from_str(text.trim_end_matches('Z'), "%Y%m%dT%H%M%S")
         .map_err(|_| invalid("Invalid ICS datetime"))?;
     let dt = tz
+        .clock()
         .from_local_datetime(&local)
         .earliest()
         .ok_or_else(|| invalid("ICS datetime falls in a timezone gap"))?;
-    Ok(Stamp { dt, all_day: false })
+    let utc = tz
+        .utc(dt)
+        .ok_or_else(|| invalid("ICS datetime falls in a timezone gap"))?;
+    Ok(Stamp {
+        dt,
+        utc,
+        zone: tz,
+        all_day: false,
+    })
 }
 
-fn start(event: &IcalEvent, tz: Tz, config: &IcsConfig) -> ProviderResult<Stamp> {
+fn start<'a>(
+    event: &IcalEvent,
+    tz: Zone<'a>,
+    config: &IcsConfig,
+    zones: &'a Zones,
+) -> ProviderResult<Stamp<'a>> {
     stamp(
         prop(&event.properties, "DTSTART").ok_or_else(|| invalid("ICS event has no DTSTART"))?,
         tz,
         config,
+        zones,
     )
 }
 
-fn duration(event: &IcalEvent, start: Stamp, config: &IcsConfig) -> ProviderResult<Duration> {
+fn duration<'a>(
+    event: &IcalEvent,
+    start: Stamp<'a>,
+    config: &IcsConfig,
+    zones: &'a Zones,
+) -> ProviderResult<Duration> {
     let duration = if let Some(end) = prop(&event.properties, "DTEND") {
-        let end = stamp(end, start.dt.timezone(), config)?;
+        let end = stamp(end, start.zone, config, zones)?;
         if end.all_day != start.all_day {
             return Err(invalid("ICS DTSTART and DTEND types differ"));
         }
-        end.dt.signed_duration_since(start.dt)
+        end.utc.signed_duration_since(start.utc)
     } else if let Some(text) = value(&event.properties, "DURATION") {
         parse_duration(text)?
     } else if start.all_day {
@@ -174,7 +203,7 @@ fn parse_duration(text: &str) -> ProviderResult<Duration> {
     Duration::try_seconds(seconds * sign).ok_or_else(|| invalid("ICS duration is too large"))
 }
 
-fn unescape(text: &str) -> String {
+pub(super) fn unescape(text: &str) -> String {
     let mut chars = text.chars();
     let mut out = String::new();
     while let Some(c) = chars.next() {
@@ -208,7 +237,7 @@ fn raw_event(
     config: &IcsConfig,
 ) -> ProviderResult<RawEvent> {
     let end = begin
-        .dt
+        .utc
         .checked_add_signed(length)
         .ok_or_else(|| invalid("ICS end time is out of range"))?;
     let id = original
@@ -217,14 +246,19 @@ fn raw_event(
     let mut raw = RawEvent::new(
         id,
         begin.raw(),
-        Stamp { dt: end, ..begin }.raw(),
+        Stamp {
+            dt: begin.zone.local_clock(end),
+            utc: end,
+            ..begin
+        }
+        .raw(),
         &config.name,
     );
     raw.summary = value(&event.properties, "SUMMARY").map(unescape);
     raw.description = value(&event.properties, "DESCRIPTION").map(unescape);
     raw.location = value(&event.properties, "LOCATION").map(unescape);
     raw.html_link = value(&event.properties, "URL").map(str::to_owned);
-    raw.timezone = Some(begin.dt.timezone().name().into());
+    raw.timezone = Some(begin.zone.name());
     raw.status = value(&event.properties, "STATUS").map(|s| s.to_ascii_lowercase());
     if let Some(original) = original {
         raw.is_recurring_instance = true;
@@ -281,13 +315,14 @@ pub(super) fn events(
     if calendars.next().is_some() {
         return Err(invalid("Expected one VCALENDAR per ICS feed"));
     }
-    let tz = timezone(
-        value(&calendar.properties, "X-WR-TIMEZONE").unwrap_or(&config.timezone),
-        &config.timezone_aliases,
-    )?;
     let window = options.time_window.clone().unwrap_or_else(|| {
         waymeet_core::TimeWindow::from_duration(Utc::now(), Duration::hours(48))
     });
+    let zones = Zones::new(&calendar, window.end)?;
+    let tz = zones.resolve(
+        value(&calendar.properties, "X-WR-TIMEZONE").unwrap_or(&config.timezone),
+        config,
+    )?;
     let mut groups: BTreeMap<String, Vec<&IcalEvent>> = BTreeMap::new();
     for event in &calendar.events {
         let uid = value(&event.properties, "UID")
@@ -304,7 +339,7 @@ pub(super) fn events(
                 if param(rid, "RANGE").is_some() {
                     return Err(invalid("ICS recurrence RANGE overrides are not supported"));
                 }
-                let original = stamp(rid, tz, config)?;
+                let original = stamp(rid, tz, config, &zones)?;
                 let slot = overrides.entry(original.key()).or_insert((event, original));
                 if revision(event) > revision(slot.0) {
                     *slot = (event, original);
@@ -317,8 +352,8 @@ pub(super) fn events(
             if cancelled(event) {
                 continue;
             }
-            let begin = start(event, tz, config)?;
-            let length = duration(event, begin, config)?;
+            let begin = start(event, tz, config, &zones)?;
+            let length = duration(event, begin, config, &zones)?;
             let recurring = event
                 .properties
                 .iter()
@@ -346,18 +381,69 @@ pub(super) fn events(
                                 })
                                 .collect::<Vec<_>>()
                                 .join(";");
-                            let rule = text
+                            let mut rule = text
                                 .parse::<RRule<Unvalidated>>()
-                                .map_err(|_| invalid("Invalid ICS recurrence rule"))?
-                                .validate(begin.dt)
-                                .map_err(|_| invalid("Unsupported ICS recurrence rule"))?;
-                            set = set.rrule(rule);
+                                .map_err(|_| invalid("Invalid ICS recurrence rule"))?;
+                            if let Zone::Embedded(_) = begin.zone {
+                                // Count valid local occurrences, not nonexistent DST-gap
+                                // times. EXDATE is applied afterwards and does not refill COUNT.
+                                let count =
+                                    rule.get_count().map(|n| n as usize).unwrap_or(usize::MAX);
+                                let until = rule.get_until().map(|dt| dt.with_timezone(&Utc));
+                                if let Some(until) = until {
+                                    rule = rule.until(begin.zone.local_clock(until));
+                                }
+                                // Validate the original COUNT and UNTIL before removing
+                                // COUNT for gap-aware expansion.
+                                rule.clone()
+                                    .validate(begin.dt)
+                                    .map_err(|_| invalid("Unsupported ICS recurrence rule"))?;
+                                let unbounded = rule
+                                    .to_string()
+                                    .split(';')
+                                    .filter(|part| !part.starts_with("COUNT="))
+                                    .collect::<Vec<_>>()
+                                    .join(";");
+                                let rule = unbounded
+                                    .parse::<RRule<Unvalidated>>()
+                                    .map_err(|_| invalid("Invalid ICS recurrence rule"))?
+                                    .validate(begin.dt)
+                                    .map_err(|_| invalid("Unsupported ICS recurrence rule"))?;
+                                let candidates = RRuleSet::new(begin.dt).rrule(rule);
+                                let horizon =
+                                    (window.end + Duration::days(1)).with_timezone(&Tz::UTC);
+                                let mut valid = 0;
+                                for (visited, date) in (&candidates).into_iter().enumerate() {
+                                    if date > horizon || valid >= count {
+                                        break;
+                                    }
+                                    if visited >= 10000 {
+                                        return Err(invalid(
+                                            "ICS recurrence expansion limit exceeded",
+                                        ));
+                                    }
+                                    if begin
+                                        .zone
+                                        .utc(date)
+                                        .is_some_and(|utc| until.is_none_or(|limit| utc <= limit))
+                                    {
+                                        set = set.rdate(date);
+                                        valid += 1;
+                                    }
+                                }
+                            } else {
+                                let rule = rule
+                                    .validate(begin.dt)
+                                    .map_err(|_| invalid("Unsupported ICS recurrence rule"))?;
+                                set = set.rrule(rule);
+                            }
                         }
                         "EXDATE" | "RDATE" => {
                             for v in p.value.as_deref().unwrap_or_default().split(',') {
                                 let mut p = p.clone();
                                 p.value = Some(v.to_owned());
-                                let date = stamp(&p, begin.dt.timezone(), config)?.dt;
+                                let stamp = stamp(&p, begin.zone, config, &zones)?;
+                                let date = begin.zone.local_clock(stamp.utc);
                                 set = if p.name == "EXDATE" {
                                     set.exdate(date)
                                 } else {
@@ -376,8 +462,16 @@ pub(super) fn events(
                     .checked_sub_signed(length)
                     .ok_or_else(|| invalid("ICS duration exceeds query range"))?;
                 let mut occurrences = set
-                    .after(lower.with_timezone(&Tz::UTC))
-                    .before(window.end.with_timezone(&Tz::UTC))
+                    .after(match begin.zone {
+                        Zone::Named(_) => lower.with_timezone(&Tz::UTC),
+                        Zone::Embedded(_) => (lower - Duration::days(1)).with_timezone(&Tz::UTC),
+                    })
+                    .before(match begin.zone {
+                        Zone::Named(_) => window.end.with_timezone(&Tz::UTC),
+                        Zone::Embedded(_) => {
+                            (window.end + Duration::days(1)).with_timezone(&Tz::UTC)
+                        }
+                    })
                     .all(10000);
                 if occurrences.limited {
                     return Err(invalid("ICS recurrence expansion limit exceeded"));
@@ -385,7 +479,15 @@ pub(super) fn events(
                 occurrences.dates.sort_unstable();
                 occurrences.dates.dedup();
                 for date in occurrences.dates {
-                    let occurrence = Stamp { dt: date, ..begin };
+                    // Generated local times inside a DST gap do not occur.
+                    let Some(utc) = begin.zone.utc(date) else {
+                        continue;
+                    };
+                    let occurrence = Stamp {
+                        dt: date,
+                        utc,
+                        ..begin
+                    };
                     if overrides.contains_key(&occurrence.key()) {
                         continue;
                     }
@@ -407,12 +509,12 @@ pub(super) fn events(
             if cancelled(event) {
                 continue;
             }
-            let begin = start(event, tz, config)?;
+            let begin = start(event, tz, config, &zones)?;
             result.push(raw_event(
                 event,
                 &uid,
                 begin,
-                duration(event, begin, config)?,
+                duration(event, begin, config, &zones)?,
                 Some(*original),
                 config,
             )?);
