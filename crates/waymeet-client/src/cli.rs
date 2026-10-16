@@ -44,6 +44,14 @@ pub struct Cli {
     pub calendar: Vec<String>,
 
     // --- Action flags ---
+    /// Skip the displayed occurrence locally, including its remaining reminders
+    #[arg(long, conflicts_with = "undo_skip")]
+    pub skip: bool,
+
+    /// Undo the latest unexpired skip in the selected calendars
+    #[arg(long)]
+    pub undo_skip: bool,
+
     /// Snooze notifications for N minutes
     #[arg(long)]
     pub snooze: Option<u32>,
@@ -107,7 +115,9 @@ impl Cli {
 
     /// Returns whether any action flag is set.
     pub fn has_action(&self) -> bool {
-        self.open_meet_url
+        self.skip
+            || self.undo_skip
+            || self.open_meet_url
             || self.copy_meeting_url
             || self.copy_meeting_id
             || self.copy_meeting_passcode

@@ -78,6 +78,11 @@ pub async fn run(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
 
     // 4. Shared state
     let state = new_shared_state();
+    state
+        .write()
+        .await
+        .load_dismissed_events(ClientConfig::dismissed_events_path())
+        .map_err(|error| ClientError::Config(format!("failed to load local skips: {error}")))?;
 
     // 5. Scheduler (tunable via [server] in config.toml)
     let scheduler = Scheduler::new(build_scheduler_config(config));
@@ -133,9 +138,13 @@ pub async fn run(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
                 _ = interval.tick() => {}
                 _ = notify_wakeup.notified() => {}
             }
-            let meetings = ticker_state.read().await.get_meetings(None);
+            // Hold the read lock through delivery: an acknowledged skip cannot race
+            // with a stale snapshot that sends another reminder afterwards.
+            let state = ticker_state.read().await;
+            let meetings = state.get_meetings(None);
             ticker_engine.check_and_notify(&meetings).await;
             ticker_engine.check_morning_agenda(&meetings).await;
+            drop(state);
             ticker_engine.cleanup().await;
         }
     });

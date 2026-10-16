@@ -62,6 +62,12 @@ pub enum Request {
         filter: Option<MeetingsFilter>,
     },
 
+    /// Locally dismiss the occurrence currently selected for display.
+    SkipMeeting { filter: MeetingsFilter },
+
+    /// Restore the latest unexpired dismissal in the selected calendars.
+    UndoSkip { filter: MeetingsFilter },
+
     /// Get server status.
     Status,
 
@@ -261,6 +267,20 @@ pub struct MeetingsFilter {
 }
 
 impl MeetingsFilter {
+    /// Applies the shared case-insensitive calendar inclusion and exclusion rules.
+    pub fn matches_calendar(&self, calendar_id: &str) -> bool {
+        let id = calendar_id.to_lowercase();
+        (self.include_calendars.is_empty()
+            || self
+                .include_calendars
+                .iter()
+                .any(|pattern| id.contains(&pattern.to_lowercase())))
+            && !self
+                .exclude_calendars
+                .iter()
+                .any(|pattern| id.contains(&pattern.to_lowercase()))
+    }
+
     /// Creates a new empty filter.
     pub fn new() -> Self {
         Self::default()

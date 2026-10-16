@@ -163,6 +163,32 @@ async fn run_default(cli: &Cli, config: &ClientConfig) -> ClientResult<()> {
         return waymeet_client::actions::snooze(&client, minutes).await;
     }
 
+    if cli.skip || cli.undo_skip {
+        let filter = build_filter(cli, config);
+        let request = if cli.skip {
+            Request::SkipMeeting { filter }
+        } else {
+            Request::UndoSkip { filter }
+        };
+        return match send_request(cli, config, &client, request).await? {
+            Response::Ok => {
+                println!(
+                    "{}",
+                    if cli.skip {
+                        "Occurrence skipped locally."
+                    } else {
+                        "Last skip undone."
+                    }
+                );
+                Ok(())
+            }
+            Response::Error { error } => Err(ClientError::Action(error.message)),
+            _ => Err(ClientError::Protocol(
+                "unexpected response to skip action".into(),
+            )),
+        };
+    }
+
     // Fetch meetings from the server
     let meetings = fetch_meetings(cli, config, &client, false).await?;
 
@@ -257,26 +283,7 @@ async fn fetch_meetings(
         Request::get_meetings_with_filter(filter)
     };
 
-    // Try to connect; if server is not running, attempt auto-spawn
-    let response = match client.send(request.clone()).await {
-        Ok(resp) => resp,
-        Err(ClientError::Connection(_)) => {
-            if config.server.auto_start {
-                info!("server not running, attempting auto-spawn");
-                auto_spawn_server(cli, client).await?;
-
-                // Retry after spawn
-                client.send(request).await?
-            } else {
-                return Err(ClientError::Connection(
-                    "server is not running (auto_start is disabled, start it manually or via systemd)".into(),
-                ));
-            }
-        }
-        Err(e) => return Err(e),
-    };
-
-    match response {
+    match send_request(cli, config, client, request).await? {
         Response::Meetings { meetings } => {
             debug!(count = meetings.len(), "received meetings");
             Ok(meetings)
@@ -289,6 +296,33 @@ async fn fetch_meetings(
             "unexpected response: {:?}",
             other
         ))),
+    }
+}
+
+/// Sends an IPC request, sharing the existing auto-start behaviour with actions.
+async fn send_request(
+    cli: &Cli,
+    config: &ClientConfig,
+    client: &SocketClient,
+    request: Request,
+) -> ClientResult<Response> {
+    // Try to connect; if server is not running, attempt auto-spawn
+    match client.send(request.clone()).await {
+        Ok(resp) => Ok(resp),
+        Err(ClientError::Connection(_)) => {
+            if config.server.auto_start {
+                info!("server not running, attempting auto-spawn");
+                auto_spawn_server(cli, client).await?;
+
+                // Retry after spawn
+                client.send(request).await
+            } else {
+                Err(ClientError::Connection(
+                    "server is not running (auto_start is disabled, start it manually or via systemd)".into(),
+                ))
+            }
+        }
+        Err(e) => Err(e),
     }
 }
 

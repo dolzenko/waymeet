@@ -26,7 +26,7 @@ use std::borrow::Cow;
 use chrono::{DateTime, Local, Timelike};
 use serde::{Deserialize, Serialize};
 
-use crate::event::MeetingView;
+use crate::event::{MeetingView, next_meeting_for_display};
 
 const DEFAULT_UNTIL_OFFSET_MINUTES: i64 = 60;
 
@@ -304,7 +304,7 @@ impl OutputFormatter {
         }
 
         // Get the next non-all-day meeting for the main display
-        let next_meeting = self.get_next_meeting_for_display(meetings);
+        let next_meeting = next_meeting_for_display(meetings);
 
         let (text, class) = if let Some(meeting) = next_meeting {
             let formatted = self.format_single_meeting(meeting, now, false, true);
@@ -387,9 +387,7 @@ impl OutputFormatter {
             .map(|m| self.to_json_meeting(m, now))
             .collect();
 
-        let next_meeting = self
-            .get_next_meeting_for_display(meetings)
-            .map(|m| self.to_json_meeting(m, now));
+        let next_meeting = next_meeting_for_display(meetings).map(|m| self.to_json_meeting(m, now));
 
         JsonOutput {
             count: json_meetings.len(),
@@ -755,18 +753,6 @@ impl OutputFormatter {
         } else {
             Cow::Borrowed(title)
         }
-    }
-
-    /// Gets the next non-all-day meeting for display.
-    fn get_next_meeting_for_display<'a>(
-        &self,
-        meetings: &'a [MeetingView],
-    ) -> Option<&'a MeetingView> {
-        // Prefer non-all-day meetings
-        meetings
-            .iter()
-            .find(|m| !m.is_all_day)
-            .or_else(|| meetings.first())
     }
 
     /// Converts a MeetingView to JsonMeeting.

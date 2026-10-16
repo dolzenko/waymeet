@@ -11,12 +11,13 @@ use chrono::{DateTime, NaiveTime, Utc};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use waymeet_core::{MeetingView, ResponseStatus};
+use waymeet_core::{MeetingView, ResponseStatus, event::next_meeting_for_display};
 use waymeet_protocol::{
     ErrorCode, ErrorResponse, EventMutationAction, MeetingsFilter, ProviderStatus, Request,
     Response, StatusInfo,
 };
 
+use crate::dismissed::DismissedEvents;
 use crate::error::{ServerError, ServerResult};
 use crate::notify::NotifyEngine;
 use crate::scheduler::SchedulerHandle;
@@ -33,6 +34,8 @@ pub struct ServerState {
     meetings: Vec<MeetingView>,
     /// Last-known-good meetings per provider.
     provider_meetings: HashMap<String, Vec<MeetingView>>,
+    /// Local occurrence dismissals, shared by queries, actions and notifications.
+    dismissed: DismissedEvents,
     /// Provider status.
     providers: Vec<ProviderStatus>,
     /// When notifications are snoozed until.
@@ -57,10 +60,46 @@ impl ServerState {
             last_sync: None,
             meetings: Vec::new(),
             provider_meetings: HashMap::new(),
+            dismissed: DismissedEvents::default(),
             providers: Vec::new(),
             snoozed_until: None,
             shutdown_requested: false,
             scheduler_handle: None,
+        }
+    }
+
+    /// Loads durable occurrence dismissals before accepting requests or sending reminders.
+    pub fn load_dismissed_events(&mut self, path: std::path::PathBuf) -> std::io::Result<()> {
+        self.dismissed = DismissedEvents::load(path)?;
+        Ok(())
+    }
+
+    /// Dismisses the same occurrence selected by the display formatter.
+    fn skip_meeting(&mut self, filter: &MeetingsFilter) -> Result<(), ErrorResponse> {
+        let mut filter = filter.clone();
+        filter.include_past_today = false;
+        let meetings = self.get_meetings(Some(&filter));
+        let meeting = next_meeting_for_display(&meetings)
+            .ok_or_else(|| ErrorResponse::new(ErrorCode::NotFound, "No meeting to skip."))?;
+        self.dismissed.skip(meeting, Utc::now()).map_err(|_| {
+            ErrorResponse::new(
+                ErrorCode::InternalError,
+                "Could not save the skip. No changes were made.",
+            )
+        })
+    }
+
+    fn undo_skip(&mut self, filter: &MeetingsFilter) -> Result<(), ErrorResponse> {
+        match self.dismissed.undo(filter, Utc::now()) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(ErrorResponse::new(
+                ErrorCode::NotFound,
+                "No unexpired skip to undo in this calendar.",
+            )),
+            Err(_) => Err(ErrorResponse::new(
+                ErrorCode::InternalError,
+                "Could not save the undo. No changes were made.",
+            )),
         }
     }
 
@@ -128,6 +167,7 @@ impl ServerState {
         now: chrono::DateTime<chrono::Local>,
     ) -> Vec<MeetingView> {
         let mut meetings: Vec<_> = self.meetings.to_vec();
+        meetings.retain(|meeting| !self.dismissed.contains(meeting, now.with_timezone(&Utc)));
         let include_past_today = filter.is_some_and(|f| f.include_past_today);
         meetings.retain(|m| {
             !m.has_ended_at(now) || (include_past_today && m.occurs_on_date(now.date_naive()))
@@ -185,27 +225,7 @@ impl ServerState {
                 meetings.retain(|m| m.other_attendee_count > 0);
             }
 
-            // Apply include_calendars filter (retain if ANY match)
-            if !filter.include_calendars.is_empty() {
-                meetings.retain(|m| {
-                    let cal_id_lower = m.calendar_id.to_lowercase();
-                    filter
-                        .include_calendars
-                        .iter()
-                        .any(|p| cal_id_lower.contains(&p.to_lowercase()))
-                });
-            }
-
-            // Apply exclude_calendars filter (remove if ANY match)
-            if !filter.exclude_calendars.is_empty() {
-                meetings.retain(|m| {
-                    let cal_id_lower = m.calendar_id.to_lowercase();
-                    !filter
-                        .exclude_calendars
-                        .iter()
-                        .any(|p| cal_id_lower.contains(&p.to_lowercase()))
-                });
-            }
+            meetings.retain(|meeting| filter.matches_calendar(&meeting.calendar_id));
 
             // Apply within_minutes filter (retain if starts within N minutes, skip all-day)
             if let Some(within) = filter.within_minutes {
@@ -444,6 +464,16 @@ impl RequestHandler {
                 debug!(meeting_count = meetings.len(), "Returning meetings");
                 Response::meetings(meetings)
             }
+            Request::SkipMeeting { filter } => {
+                match self.state.write().await.skip_meeting(filter) {
+                    Ok(()) => Response::Ok,
+                    Err(error) => Response::from_error(error),
+                }
+            }
+            Request::UndoSkip { filter } => match self.state.write().await.undo_skip(filter) {
+                Ok(()) => Response::Ok,
+                Err(error) => Response::from_error(error),
+            },
             Request::Snooze { minutes } => {
                 debug!(minutes = *minutes, "Handling Snooze request");
                 {
@@ -663,6 +693,100 @@ mod tests {
 
         state.request_shutdown();
         assert!(state.shutdown_requested());
+    }
+
+    #[tokio::test]
+    async fn skips_share_query_reminder_and_action_filtering_before_limit() {
+        let state = new_shared_state();
+        let handler = RequestHandler::new(state.clone());
+        let mut first = provider_meeting("first", "ics:work", 15);
+        first.calendar_id = "work".into();
+        let mut next = first.clone();
+        next.id = "next".into();
+        next.start_local += chrono::Duration::minutes(15);
+        let mut personal = first.clone();
+        personal.calendar_id = "personal".into();
+        let mut all_day = first.clone();
+        all_day.id = "all-day".into();
+        all_day.is_all_day = true;
+        state.write().await.set_meetings(vec![
+            all_day.clone(),
+            first.clone(),
+            next.clone(),
+            personal.clone(),
+        ]);
+        let filter = MeetingsFilter::new().include_calendars(vec!["work".into()]);
+        assert_eq!(
+            handler
+                .handle(&Request::SkipMeeting {
+                    filter: filter.clone()
+                })
+                .await,
+            Response::Ok
+        );
+        let state_read = state.read().await;
+        // None is the actual reminder ticker query, not the client-scoped request.
+        assert_eq!(
+            state_read.get_meetings(None),
+            [all_day.clone(), next.clone(), personal.clone()]
+        );
+        let limited = filter.clone().skip_all_day(true).limit(1);
+        assert_eq!(state_read.get_meetings(Some(&limited)), [next.clone()]);
+        let mut agenda = filter.clone();
+        agenda.include_past_today = true;
+        assert!(!state_read.get_meetings(Some(&agenda)).contains(&first));
+        drop(state_read);
+        // Provider sync keeps skipped state while replacing the cached meetings.
+        state
+            .write()
+            .await
+            .set_meetings(vec![first.clone(), next.clone(), personal]);
+        assert_eq!(state.read().await.get_meetings(Some(&limited)), [next]);
+        let mut restrictive_undo = filter;
+        restrictive_undo.include_titles = vec!["does not match".into()];
+        assert_eq!(
+            handler
+                .handle(&Request::UndoSkip {
+                    filter: restrictive_undo
+                })
+                .await,
+            Response::Ok
+        );
+        assert_eq!(state.read().await.get_meetings(Some(&limited)), [first]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_skips_are_serialised_and_persisted_without_lost_updates() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("dismissed-events.json");
+        let state = new_shared_state();
+        let meetings = vec![
+            provider_meeting("first", "ics:work", 10),
+            provider_meeting("next", "ics:work", 20),
+        ];
+        {
+            let mut state = state.write().await;
+            state.load_dismissed_events(path.clone()).unwrap();
+            state.set_meetings(meetings.clone());
+        }
+        let handler = RequestHandler::new(state.clone());
+        let request = Request::SkipMeeting {
+            filter: MeetingsFilter::new(),
+        };
+        let (first, next) = tokio::join!(handler.handle(&request), handler.handle(&request));
+        assert_eq!((first, next), (Response::Ok, Response::Ok));
+        let mut reloaded = ServerState::new();
+        reloaded.load_dismissed_events(path).unwrap();
+        reloaded.set_meetings(meetings.clone());
+        assert!(reloaded.get_meetings(None).is_empty());
+        reloaded.undo_skip(&MeetingsFilter::new()).unwrap();
+        assert_eq!(reloaded.get_meetings(None), [meetings[1].clone()]);
+        assert!(
+            matches!(handler.handle(&request).await, Response::Error { error } if error.code == ErrorCode::NotFound)
+        );
+        assert!(
+            matches!(handler.handle(&Request::UndoSkip { filter: MeetingsFilter::new().include_calendars(vec!["unknown".into()]) }).await, Response::Error { error } if error.code == ErrorCode::NotFound)
+        );
     }
 
     fn provider_meeting(id: &str, provider: &str, start_offset_mins: i64) -> MeetingView {

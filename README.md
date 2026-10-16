@@ -254,3 +254,22 @@ For implementation details, see `DESIGN.md`.
 ## Licence
 
 Apache-2.0
+
+### Skipping an occurrence locally
+
+Use `waymeet --calendar ID --skip` to dismiss the occurrence currently selected
+for the display. The next eligible meeting is shown immediately; joining actions
+and reminders also exclude the skipped occurrence. Your calendar invitation and
+attendance response remain unchanged.
+
+Use `waymeet --calendar ID --undo-skip` to restore the latest unexpired skip in
+that calendar. Repeated undo restores earlier skips in reverse order. Omit
+`--calendar` to use the configured calendar selection. Other display filters do
+not prevent undoing a skip.
+
+Skips are stored privately in `$XDG_DATA_HOME/waymeet/dismissed-events.json`
+(default `~/.local/share/waymeet/dismissed-events.json`). They survive daemon
+restarts and calendar refreshes, and expire when the occurrence ends. A changed
+start time is a new occurrence. Recurring meetings and identical IDs in other
+providers or calendars remain independent. A failed save leaves the previous
+state intact; invalid saved state is reported during daemon startup.

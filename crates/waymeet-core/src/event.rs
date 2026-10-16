@@ -517,6 +517,14 @@ fn all_day_date_bounds<Tz: TimeZone>(
     )
 }
 
+/// Selects the occurrence shown in the chip, preferring timed events.
+pub fn next_meeting_for_display(meetings: &[MeetingView]) -> Option<&MeetingView> {
+    meetings
+        .iter()
+        .find(|meeting| !meeting.is_all_day)
+        .or_else(|| meetings.first())
+}
+
 impl MeetingView {
     /// Creates a MeetingView from a NormalizedEvent.
     ///

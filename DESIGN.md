@@ -331,3 +331,22 @@ With `display.tooltip_include_past_today`, the CLI requests a second list for th
 tooltip, without the main result-count limit. Chip selection, urgency and join
 operations use only the ordinary ongoing/upcoming list. Tooltip limits and
 calendar/title filters remain explicit controls.
+
+## Local occurrence dismissals
+
+`SkipMeeting { filter }` and `UndoSkip { filter }` are additive version-1 IPC
+requests. Skip uses the core display selector and the normal query filters;
+undo uses only the shared calendar matching rule. The daemon owns one ordered
+store keyed by provider, calendar, event ID and UTC start time, with the event
+end as expiry. `ServerState::get_meetings` removes active dismissals before
+limits; display, tooltip, meeting actions and the notification ticker therefore
+share the same exclusion rule. The ticker retains its state read lock through
+notification delivery so a completed skip cannot be followed by delivery from
+a stale ticker snapshot.
+
+The normal daemon loads the durable store before starting background tasks.
+Library-created state uses an explicit in-memory default until a durable store
+is loaded. Durable changes write a private temporary file next to the target,
+flush and sync it, then atomically replace the JSON file before changing memory.
+The ordered entries support calendar-scoped repeated undo. No provider mutation
+is performed. Upgrade the daemon and CLI together to use the new requests.
