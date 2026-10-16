@@ -7,12 +7,17 @@ use chrono::{Local, Utc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use waymeet_core::{EventTime, MeetingView, NormalizedEvent};
 use waymeet_protocol::{Envelope, Request, Response};
+use waymeet_server::ServerState;
 
 async fn render(offset: Option<i64>) -> serde_json::Value {
-    render_case(offset, false).await
+    render_case(offset, false, None).await
 }
 
-async fn render_case(offset: Option<i64>, with_history: bool) -> serde_json::Value {
+async fn render_case(
+    offset: Option<i64>,
+    with_history: bool,
+    calendar: Option<&str>,
+) -> serde_json::Value {
     // Optional overrides exercise an installed binary and only the display table
     // of a local configuration. Provider credentials are never resolved or copied.
     let config_path = std::env::var_os("WAYMEET_TEST_DISPLAY_CONFIG")
@@ -29,17 +34,24 @@ async fn render_case(offset: Option<i64>, with_history: bool) -> serde_json::Val
         .as_table_mut()
         .unwrap()
         .insert("display".into(), source["display"].clone());
+    let mut filters = toml::Table::new();
     if with_history {
-        let filters: toml::Value = toml::from_str("limit = 1").unwrap();
-        config
-            .as_table_mut()
-            .unwrap()
-            .insert("filters".into(), filters);
+        filters.insert("limit".into(), toml::Value::Integer(1));
         config["display"].as_table_mut().unwrap().insert(
             "tooltip_include_past_today".into(),
             toml::Value::Boolean(true),
         );
     }
+    if calendar.is_some() {
+        filters.insert(
+            "include_calendars".into(),
+            toml::Value::Array(vec!["other".into()]),
+        );
+    }
+    config
+        .as_table_mut()
+        .unwrap()
+        .insert("filters".into(), toml::Value::Table(filters));
     let agenda_enabled = config["display"]
         .get("tooltip_include_past_today")
         .and_then(toml::Value::as_bool)
@@ -51,7 +63,7 @@ async fn render_case(offset: Option<i64>, with_history: bool) -> serde_json::Val
     let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
 
     let now = Utc::now();
-    let meetings: Vec<_> = offset
+    let mut meetings: Vec<_> = offset
         .into_iter()
         .map(|minutes| {
             let start = now + chrono::Duration::minutes(minutes);
@@ -65,6 +77,16 @@ async fn render_case(offset: Option<i64>, with_history: bool) -> serde_json::Val
             MeetingView::from_event(&event, now)
         })
         .collect();
+    if calendar.is_some() {
+        let event = NormalizedEvent::new(
+            "other",
+            "Other calendar regression",
+            EventTime::from_utc(now + chrono::Duration::minutes(1)),
+            EventTime::from_utc(now + chrono::Duration::minutes(30)),
+            "other",
+        );
+        meetings.insert(0, MeetingView::from_event(&event, now));
+    }
     let mut agenda = meetings.clone();
     if with_history {
         let start = Local::now()
@@ -102,16 +124,21 @@ async fn render_case(offset: Option<i64>, with_history: bool) -> serde_json::Val
                 filter.as_ref().is_some_and(|f| f.include_past_today),
                 include_past
             );
-            if include_past {
-                assert!(filter.unwrap().limit.is_none());
+            if let Some(calendar) = calendar {
+                assert_eq!(filter.as_ref().unwrap().include_calendars, [calendar]);
             }
+            if include_past {
+                assert!(filter.as_ref().unwrap().limit.is_none());
+            }
+            let mut state = ServerState::new();
+            state.set_meetings(if include_past {
+                agenda.clone()
+            } else {
+                meetings.clone()
+            });
             let response = Envelope::response(
                 request.request_id,
-                Response::meetings(if include_past {
-                    agenda.clone()
-                } else {
-                    meetings.clone()
-                }),
+                Response::meetings(state.get_meetings(filter.as_ref())),
             );
             stream
                 .write_all(&waymeet_protocol::encode_message(&response).unwrap())
@@ -128,6 +155,9 @@ async fn render_case(offset: Option<i64>, with_history: bool) -> serde_json::Val
         .arg("--socket-path")
         .arg(socket_path)
         .kill_on_drop(true);
+    if let Some(calendar) = calendar {
+        command.args(["--calendar", calendar]);
+    }
     let (_, output) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(server, command.output())
     })
@@ -190,7 +220,7 @@ async fn empty_calendar_has_no_unexpanded_template() {
 
 #[tokio::test]
 async fn agenda_does_not_replace_upcoming_chip_with_finished_event() {
-    let output = render_case(Some(15), true).await;
+    let output = render_case(Some(15), true, None).await;
     assert!(
         !output["text"]
             .as_str()
@@ -208,7 +238,7 @@ async fn agenda_does_not_replace_upcoming_chip_with_finished_event() {
 
 #[tokio::test]
 async fn finished_events_remain_in_tooltip_with_no_upcoming_chip() {
-    let output = render_case(None, true).await;
+    let output = render_case(None, true, None).await;
     assert!(
         !output["text"]
             .as_str()
@@ -225,4 +255,41 @@ async fn finished_events_remain_in_tooltip_with_no_upcoming_chip() {
     let tooltip = output["tooltip"].as_str().unwrap();
     assert!(!tooltip.contains("Now"));
     assert!(tooltip.contains("00:00"));
+}
+
+#[tokio::test]
+async fn calendar_selection_scopes_chip_and_daily_agenda() {
+    let output = render_case(Some(15), true, Some("test")).await;
+    assert!(
+        output["text"]
+            .as_str()
+            .unwrap()
+            .contains("Calendar regression")
+    );
+    assert!(
+        output["tooltip"]
+            .as_str()
+            .unwrap()
+            .contains("Morning reminder")
+    );
+    for field in ["text", "tooltip"] {
+        assert!(
+            !output[field]
+                .as_str()
+                .unwrap()
+                .contains("Other calendar regression")
+        );
+    }
+}
+
+#[tokio::test]
+async fn empty_selected_calendar_keeps_other_calendars_out_of_chip() {
+    let output = render_case(None, false, Some("test")).await;
+    assert_eq!(output["tooltip"], "No upcoming meetings");
+    assert!(
+        !output["text"]
+            .as_str()
+            .unwrap()
+            .contains("Other calendar regression")
+    );
 }

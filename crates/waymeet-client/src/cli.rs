@@ -39,6 +39,10 @@ pub struct Cli {
     #[arg(long)]
     pub privacy: bool,
 
+    /// Only include calendars whose IDs contain this text (repeatable)
+    #[arg(long, value_name = "ID")]
+    pub calendar: Vec<String>,
+
     // --- Action flags ---
     /// Snooze notifications for N minutes
     #[arg(long)]

@@ -319,7 +319,9 @@ fn build_filter(cli: &Cli, config: &ClientConfig) -> MeetingsFilter {
     }
 
     // Calendar filters
-    if !filters.include_calendars.is_empty() {
+    if !cli.calendar.is_empty() {
+        filter = filter.include_calendars(cli.calendar.clone());
+    } else if !filters.include_calendars.is_empty() {
         filter = filter.include_calendars(filters.include_calendars.clone());
     }
 
@@ -673,8 +675,40 @@ fn format_duration_human(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::has_calendar_configuration;
+    use super::{build_filter, has_calendar_configuration};
+    use clap::Parser;
+    use waymeet_client::cli::Cli;
     use waymeet_client::config::ClientConfig;
+
+    #[test]
+    fn calendar_selection_overrides_config_for_display_and_actions() {
+        let mut config = ClientConfig::default();
+        config.filters.include_calendars = vec!["other".into()];
+        for mode in ["--waybar", "--json", "--open-meet-url"] {
+            let cli = Cli::parse_from(["waymeet", "--calendar", "work", mode]);
+            assert_eq!(build_filter(&cli, &config).include_calendars, ["work"]);
+        }
+    }
+
+    #[test]
+    fn calendar_selection_is_repeatable_and_preserves_other_filters() {
+        let mut config = ClientConfig::default();
+        config.filters.skip_all_day = true;
+        config.filters.exclude_calendars = vec!["archive".into()];
+        let cli = Cli::parse_from(["waymeet", "--calendar", "work", "--calendar", "google"]);
+        let filter = build_filter(&cli, &config);
+        assert_eq!(filter.include_calendars, ["work", "google"]);
+        assert_eq!(filter.exclude_calendars, ["archive"]);
+        assert!(filter.skip_all_day);
+    }
+
+    #[test]
+    fn calendar_selection_uses_config_when_flag_is_absent() {
+        let mut config = ClientConfig::default();
+        config.filters.include_calendars = vec!["work".into()];
+        let cli = Cli::parse_from(["waymeet"]);
+        assert_eq!(build_filter(&cli, &config).include_calendars, ["work"]);
+    }
 
     #[test]
     fn has_calendar_configuration_false_when_empty() {

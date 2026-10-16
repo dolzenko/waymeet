@@ -37,6 +37,20 @@ configuring a provider, set `[server] auto_start = false` and run
 
 ## Quick Start
 
+To show each calendar separately whilst sharing one daemon and configuration:
+
+```sh
+waymeet --calendar work --waybar
+waymeet --calendar google --waybar
+waymeet --calendar work --open-meet-url
+```
+
+`--calendar ID` selects calendars whose IDs contain `ID`, ignoring case,
+using the same matching rule as `filters.include_calendars`. Repeat the flag
+to include several calendars. It overrides the configured inclusion list;
+other filters still apply. The selection covers the chip, daily tooltip and
+meeting actions, whilst the daemon continues synchronising every source.
+
 ### Google Calendar
 
 Run the setup wizard:
